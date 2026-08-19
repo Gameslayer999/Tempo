@@ -1,0 +1,13 @@
+# Build artifacts (SwiftPM)
+.build/
+*.xcodeproj
+.swiftpm/
+
+# Local runtime state & credentials — never source (Agent Guideline #12)
+*.log
+logs/
+config.json
+tokens.json
+
+# OS
+.DS_Store
