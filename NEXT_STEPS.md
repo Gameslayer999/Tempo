@@ -39,8 +39,9 @@
 
 - [ ] **User verification pass** — run `.build/release/tempo`, approve the one-time
       Automation prompt (Tempo → Spotify), and check: strip hugs the notch; artwork +
-      visualizer render; hover subtly grows the strip (decision 009); click expands
-      into the Liquid Glass panel (decision 010); controls work; agent lights match
+      visualizer render; hover expands the Liquid Glass panel with a haptic tick,
+      mouse-off collapses it, click pins it, click outside unpins (decision 011);
+      the 0.15s hover-out debounce feels natural; controls work; agent lights match
       open sessions; clicks outside the strip pass through to other apps.
 - [ ] **Check PlaylistSection / AgentLightsView contrast on glass** — the glass
       change added text shadows to ContentView's own controls only; the other two
@@ -58,8 +59,6 @@
 
 ## Later
 
-- [ ] Trackpad haptic tick on hover (boringNotch has one via `.sensoryFeedback`) —
-      deliberately left out of decision 009 as unrequested.
 - [ ] Apple Music support (AppleScript dictionary exists; artwork via `artworks` raw
       data instead of a URL).
 - [ ] Real audio-reactive visualizer (Core Audio process tap) — deferred per
@@ -76,6 +75,10 @@
 
 ## Recently completed
 
+- **2026-08-19** — Interaction model reworked (decision 011, revising 009): hover
+  fully expands with a trackpad haptic tick, mouse-off collapses (0.15s debounce),
+  click pins, click outside unpins; the 10×4pt hover-grow and its dead-zone
+  constants removed.
 - **2026-08-19** — Hover-grow on the collapsed strip (decision 009) and Liquid Glass
   on the expanded panel (decision 010), after checking boringNotch's hover source and
   Notchy's glass styling; `glassEffect` verified against the macOS 26.5 SDK with an

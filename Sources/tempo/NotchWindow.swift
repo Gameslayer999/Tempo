@@ -26,14 +26,6 @@ enum NotchGeometry {
     static let stripHeight: CGFloat = notchHeight
     static let panelWidth: CGFloat = notchWidth + sidePadding * 2
 
-    // Hover-grow amounts for the collapsed strip (boringNotch-style subtle
-    // grow on mouse-in). Width grows from panelWidth - hoverGrowWidth up to
-    // panelWidth (the window's own edge, since decision 008 keeps the window
-    // fixed-size — there is no room to grow past it), height grows downward
-    // by hoverGrowHeight from the real notch height.
-    static let hoverGrowWidth: CGFloat = 10
-    static let hoverGrowHeight: CGFloat = 4
-
     static var screenFrame: NSRect {
         targetScreen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
     }
@@ -53,12 +45,12 @@ enum NotchGeometry {
 final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     private let stripRect: CGRect
     private let fullRect: CGRect
-    private let isExpandedProvider: () -> Bool
+    private let isDisplayedExpandedProvider: () -> Bool
 
-    init(stripRect: CGRect, fullRect: CGRect, isExpandedProvider: @escaping () -> Bool, rootView: Content) {
+    init(stripRect: CGRect, fullRect: CGRect, isDisplayedExpandedProvider: @escaping () -> Bool, rootView: Content) {
         self.stripRect = stripRect
         self.fullRect = fullRect
-        self.isExpandedProvider = isExpandedProvider
+        self.isDisplayedExpandedProvider = isDisplayedExpandedProvider
         super.init(rootView: rootView)
     }
 
@@ -68,11 +60,11 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
 
     @available(*, unavailable)
     required init(rootView: Content) {
-        fatalError("use init(stripRect:fullRect:isExpandedProvider:rootView:) instead")
+        fatalError("use init(stripRect:fullRect:isDisplayedExpandedProvider:rootView:) instead")
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        let activeRect = isExpandedProvider() ? fullRect : stripRect
+        let activeRect = isDisplayedExpandedProvider() ? fullRect : stripRect
         guard activeRect.contains(point) else { return nil }
         return super.hitTest(point)
     }
@@ -109,38 +101,39 @@ final class NotchPanel: NSPanel {
         isMovable = false
         isReleasedWhenClosed = false
 
-        // The strip's hit-test rect always uses the hover-grown height (not
-        // just the resting stripHeight): if it used the resting size, the
-        // strip would grow on hover-in, push the mouse outside this rect,
-        // hitTest would return nil, AppKit would treat the mouse as having
-        // left the view, hover would drop, the strip would shrink back, the
-        // mouse would be back inside, and hover would re-trigger — a flicker
-        // loop. Sizing the passthrough rect for the grown state up front
-        // costs a few extra points of dead zone below the strip while it's
-        // not hovered, which is an acceptable trade for zero flicker. Width
-        // is already panelWidth (the window's own edge) in both hover states,
-        // so it needs no such adjustment.
-        let hoverGrowHeight = NotchGeometry.hoverGrowHeight
+        // Passthrough rect tracks "displayed-expanded" (hover OR pin), not
+        // just the pinned flag: hovering the strip must grow the reachable
+        // region immediately so the mouse can travel down into the controls
+        // without ever leaving the active rect. Stability: fullRect always
+        // contains stripRect (the full panel strictly encloses the strip at
+        // its top edge), so the moment displayed-expanded flips true the
+        // active rect only ever grows around a mouse point that was already
+        // inside it — it can never eject the pointer and force a spurious
+        // exit/collapse. No dead-zone headroom is needed for this (unlike the
+        // old subtle hover-grow), since the rect flip is instant rather than
+        // animated.
         let hostingView = PassthroughHostingView(
             stripRect: CGRect(
                 x: 0,
-                y: panelHeight - stripHeight - hoverGrowHeight,
+                y: panelHeight - stripHeight,
                 width: panelWidth,
-                height: stripHeight + hoverGrowHeight
+                height: stripHeight
             ),
             fullRect: CGRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
-            isExpandedProvider: { [weak state] in state?.isExpanded ?? false },
+            isDisplayedExpandedProvider: { [weak state] in state?.displayedExpanded ?? false },
             rootView: content
         )
         contentView = hostingView
 
-        // Click outside the panel (in another app, or the desktop) collapses
-        // the expanded view. Global monitors only fire for events outside our
-        // own app's windows, which is exactly "outside" here.
+        // Click outside the panel (in another app, or the desktop) unpins
+        // and collapses the expanded view. Global monitors only fire for
+        // events outside our own app's windows, which is exactly "outside"
+        // here.
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
-            guard let self, self.state.isExpanded else { return }
+            guard let self, self.state.isExpanded || self.state.isHovered else { return }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                 self.state.isExpanded = false
+                self.state.isHovered = false
             }
         }
     }

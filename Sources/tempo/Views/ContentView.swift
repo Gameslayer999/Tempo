@@ -1,11 +1,22 @@
+import AppKit
 import SwiftUI
 
-/// The collapsed strip + expanded panel layout, and the expand/collapse
-/// animation. The panel window is always sized to the expanded (max)
-/// dimensions (see NotchWindow.swift); this view draws top-aligned so the
-/// collapsed strip sits flush with the notch and the rest of the window is
-/// empty until expanded. Wired against the service stubs so feature agents
-/// never need to touch this file.
+/// The collapsed strip + expanded panel layout, and the hover/pin
+/// expand-collapse model. The panel window is always sized to the expanded
+/// (max) dimensions (see NotchWindow.swift); this view draws top-aligned so
+/// the collapsed strip sits flush with the notch and the rest of the window
+/// is empty until expanded. Wired against the service stubs so feature
+/// agents never need to touch this file.
+///
+/// Interaction model (revision of decision 009):
+/// - Hover-in on the collapsed strip grows the panel to the full expanded
+///   view immediately (with a haptic tick on the collapsed → hover-expand
+///   transition), matching what a click used to show.
+/// - Hover-out collapses back to the strip, unless a click pinned it open.
+/// - A click on the expanded panel's background (not on a control) pins it:
+///   `state.isExpanded` becomes true and it now survives mouse-out.
+/// - A click outside the panel (handled in NotchWindow.swift's global
+///   monitor) unpins and clears hover, collapsing it.
 struct ContentView: View {
     @ObservedObject var state: AppState
     @ObservedObject var music: MusicService
@@ -16,51 +27,80 @@ struct ContentView: View {
     private let sidePadding = NotchGeometry.sidePadding
     private let panelWidth = NotchGeometry.panelWidth
     private let panelHeight = NotchGeometry.panelHeight
-    private let hoverGrowWidth = NotchGeometry.hoverGrowWidth
-    private let hoverGrowHeight = NotchGeometry.hoverGrowHeight
 
-    // boringNotch-style springy grow: quick but with a little overshoot.
-    private let hoverSpring = Animation.spring(response: 0.32, dampingFraction: 0.68, blendDuration: 0)
+    // Cancellable delay on hover-out only. It absorbs the case where the
+    // mouse travels from the strip down into the controls faster than the
+    // expand spring grows the hit region under it — a brief, real gap that
+    // would otherwise read as "left the panel" and collapse mid-motion. A
+    // re-hover within the window cancels the pending collapse. Hover-in
+    // itself is never delayed.
+    @State private var hoverCollapseTask: Task<Void, Never>?
 
-    // Hover-grow only applies to the collapsed strip, never the expanded panel.
-    private var isHoverGrown: Bool { state.isHovered && !state.isExpanded }
-    private var collapsedWidth: CGFloat { isHoverGrown ? panelWidth : panelWidth - hoverGrowWidth }
-    private var collapsedHeight: CGFloat { isHoverGrown ? stripHeight + hoverGrowHeight : stripHeight }
+    // What the UI actually shows: pinned (click) or currently hovered.
+    private var displayedExpanded: Bool { state.displayedExpanded }
 
     var body: some View {
         VStack(spacing: 0) {
-            strip
-            if state.isExpanded {
-                expandedContent
+            VStack(spacing: 0) {
+                strip
+                if displayedExpanded {
+                    expandedContent
+                }
             }
+            .frame(width: panelWidth, height: displayedExpanded ? panelHeight : stripHeight, alignment: .top)
+            .contentShape(Rectangle())
+            .onHover(perform: handleHover)
             Spacer(minLength: 0)
         }
         .frame(width: panelWidth, height: panelHeight, alignment: .top)
         .background(backgroundShape, alignment: .top)
-        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: state.isExpanded)
-        .animation(hoverSpring, value: state.isHovered)
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: displayedExpanded)
+    }
+
+    /// Hover-in expands immediately and, only on the collapsed →
+    /// hover-expand transition (never on repeat mouse moves within an
+    /// already-hovered/pinned panel, never on hover-out), fires a trackpad
+    /// haptic tick. Hover-out is debounced ~0.15s; see `hoverCollapseTask`.
+    private func handleHover(_ hovering: Bool) {
+        hoverCollapseTask?.cancel()
+        hoverCollapseTask = nil
+
+        if hovering {
+            let wasFullyCollapsed = !state.isExpanded && !state.isHovered
+            state.isHovered = true
+            if wasFullyCollapsed {
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            }
+        } else {
+            hoverCollapseTask = Task {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled else { return }
+                state.isHovered = false
+            }
+        }
     }
 
     // Rounded-bottom-corners shape that visually merges with the physical
     // notch. Only the bottom corners round; the top edge stays square and
     // flush against the notch/menu bar. Collapsed: pure black, always (UI
     // Principle #6 — must keep merging with the notch, never glass).
-    // Expanded: Liquid Glass body (macOS 26+) with a black-to-glass blend at
-    // the top so the seam against the notch stays black.
+    // Expanded (hover or pin): Liquid Glass body (macOS 26+) with a
+    // black-to-glass blend at the top so the seam against the notch stays
+    // black.
     private var backgroundShape: some View {
         let shape = UnevenRoundedRectangle(
             topLeadingRadius: 0,
-            bottomLeadingRadius: state.isExpanded ? 14 : 10,
-            bottomTrailingRadius: state.isExpanded ? 14 : 10,
+            bottomLeadingRadius: displayedExpanded ? 14 : 10,
+            bottomTrailingRadius: displayedExpanded ? 14 : 10,
             topTrailingRadius: 0
         )
         return Group {
-            if state.isExpanded {
+            if displayedExpanded {
                 expandedBackground(shape: shape)
             } else {
                 shape
                     .fill(Color.black)
-                    .frame(width: collapsedWidth, height: collapsedHeight, alignment: .top)
+                    .frame(width: panelWidth, height: stripHeight, alignment: .top)
             }
         }
     }
@@ -76,6 +116,18 @@ struct ContentView: View {
         }
         .frame(width: panelWidth, height: panelHeight, alignment: .top)
         .clipShape(shape)
+        .contentShape(shape)
+        .onTapGesture {
+            // A click anywhere on the expanded panel's background layer
+            // pins it open. This gesture lives on the background, which is
+            // rendered behind the strip/controls stack (see `body`'s
+            // `.background(backgroundShape)`) — transport buttons, the
+            // playlist menu, and the Connect button sit in front of it and
+            // consume their own taps first, so only points the foreground
+            // content doesn't claim (empty space, text, artwork, gaps)
+            // fall through to pin here.
+            state.isExpanded = true
+        }
     }
 
     @ViewBuilder
@@ -98,14 +150,7 @@ struct ContentView: View {
             VisualizerView(isPlaying: state.nowPlaying?.isPlaying ?? false)
                 .frame(width: sidePadding, height: stripHeight)
         }
-        .frame(width: collapsedWidth, height: collapsedHeight, alignment: .top)
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            state.isHovered = hovering
-        }
-        .onTapGesture {
-            state.isExpanded.toggle()
-        }
+        .frame(width: panelWidth, height: stripHeight, alignment: .top)
     }
 
     private var artworkView: some View {

@@ -13,10 +13,12 @@ session status**.
 **Collapsed (default)** — a slim strip flush with the notch:
 - current Spotify album artwork on the left of the notch
 - a Dynamic-Island-style audio visualizer on the right (animates while music plays)
-- hovering the strip makes it grow slightly (springy, boringNotch-style)
+**Hover to expand** — hovering the strip opens the full panel (with a trackpad
+haptic tick); moving the mouse away collapses it. **Click the open panel to pin it**
+so it stays expanded; click anywhere outside to unpin and collapse.
 
-**Click to expand** — a Liquid Glass panel (macOS 26's design language; frosted
-material on older macOS) opens below the notch:
+The expanded view is a Liquid Glass panel (macOS 26's design language; frosted
+material on older macOS) opening below the notch:
 - music controls: play / pause / previous / next
 - **add the current song to a Spotify playlist**
 - **agent session lights** — one colored light per open Claude Code session

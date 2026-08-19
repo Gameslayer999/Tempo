@@ -19,8 +19,9 @@
 | 006 | 2026-08-19 | Window: non-activating borderless NSPanel hugging the physical notch; click toggles collapsed/expanded | Accepted |
 | 007 | 2026-08-19 | Repository: private GitHub repo `Gameslayer999/Tempo`; v1 scope is Spotify-only | Accepted |
 | 008 | 2026-08-19 | Panel sizing: one static NSPanel at expanded size; SwiftUI animates content; custom `hitTest` passthrough outside the drawn shape | Accepted |
-| 009 | 2026-08-19 | Hover-grow: strip expands ~10×4pt on hover (boringNotch-style spring); passthrough rect is always the hover-grown size so flicker is structurally impossible | Accepted |
+| 009 | 2026-08-19 | Hover-grow: strip expands ~10×4pt on hover (boringNotch-style spring); passthrough rect is always the hover-grown size so flicker is structurally impossible | Revised by 011 |
 | 010 | 2026-08-19 | Liquid Glass: expanded panel uses macOS 26 `glassEffect` (`.ultraThinMaterial` fallback) with a black-to-glass top gradient; collapsed strip stays pure black | Accepted |
+| 011 | 2026-08-19 | Interaction model: hover fully expands (transient) with a haptic tick; click pins; click outside unpins — revises 009 | Accepted |
 
 ---
 
@@ -261,3 +262,34 @@ solid.
   `AgentLightsView` contrast on glass is unverified (their files weren't in scope) —
   flagged in `NEXT_STEPS.md`.
 - No theme toggle — glass is simply the look (Notchy documents no toggle either).
+
+---
+
+## 011 — Hover fully expands; click pins; click outside unpins (revises 009)
+
+**Date:** 2026-08-19 · **Status:** Accepted (user-specified)
+
+**Context.** The user upgraded the interaction model: instead of 009's subtle
+10×4pt hover-grow, hovering should open the FULL expanded panel, mouse-off should
+collapse it, a click should hold ("pin") it open, and a click outside should unpin
+and collapse. The user also asked for the haptic tick 009 had deliberately omitted.
+
+**Choice.**
+- **State model:** `isExpanded` is now the click-owned *pinned* flag; `isHovered`
+  tracks the pointer; a computed `displayedExpanded = isExpanded || isHovered` on
+  `AppState` drives both the SwiftUI layout and the passthrough hit-test rect.
+- **Hover:** `.onHover` sits on a wrapper spanning the strip when collapsed and the
+  whole panel when displayed-expanded. Hover-in fires
+  `NSHapticFeedbackManager.defaultPerformer.perform(.alignment, …)` only on the true
+  collapsed→hover transition (not repeats, not into an already-pinned panel).
+- **Pin:** an `onTapGesture` on the glass background layer (behind the content via
+  `.background(…)`) sets the pin — buttons and menus in the foreground consume their
+  own taps first, so pinning never steals control clicks. The strip's old
+  click-to-toggle is superseded. The global outside-click monitor clears both flags.
+- **Hit-test/flicker:** the passthrough rect flips instantly (boolean) between strip
+  rect and full rect while the visual grows on the spring, and the full rect strictly
+  contains the strip rect, so the flip can never eject the pointer — 009's dead-zone
+  headroom (`hoverGrowWidth/Height`) became unnecessary and was removed. One real
+  jitter case remains: a pointer outrunning the ~0.35s spring into not-yet-rendered
+  panel area can fire a spurious hover-out, absorbed by a 0.15s cancellable hover-out
+  debounce (hover-in is never delayed).
