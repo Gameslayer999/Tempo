@@ -18,6 +18,7 @@
 | 005 | 2026-08-19 | AgentStatus integration: read-only consumer of AgentStatus's existing status files; Tempo installs no hooks | Accepted |
 | 006 | 2026-08-19 | Window: non-activating borderless NSPanel hugging the physical notch; click toggles collapsed/expanded | Accepted |
 | 007 | 2026-08-19 | Repository: private GitHub repo `Gameslayer999/Tempo`; v1 scope is Spotify-only | Accepted |
+| 008 | 2026-08-19 | Panel sizing: one static NSPanel at expanded size; SwiftUI animates content; custom `hitTest` passthrough outside the drawn shape | Accepted |
 
 ---
 
@@ -163,6 +164,26 @@ expands on click, and never interferes with other apps.
   the notch (music controls, playlist picker, agent lights). Click outside or
   re-click → collapse.
 - SwiftUI hosted inside the panel (`NSHostingView`) for the animation work.
+
+---
+
+## 008 — Panel sizing: static expanded-size NSPanel + `hitTest` passthrough
+
+**Date:** 2026-08-19 · **Status:** Accepted
+
+**Context.** The panel must animate between the collapsed strip and the expanded
+view. Animating the NSWindow frame itself is janky and makes the frame math fragile.
+
+**Choice.** The `NotchPanel` window is always sized to the expanded maximum
+(`notchWidth+220 × 190`), positioned once flush with the notch, and never resized —
+SwiftUI animates the collapsed/expanded content inside it. To keep the invisible
+region from swallowing clicks meant for other apps (Agent Guideline #3),
+`PassthroughHostingView` (an `NSHostingView` subclass in `NotchWindow.swift`)
+overrides `hitTest(_:)` to return `nil` outside the strip rect (collapsed) or the
+full panel rect (expanded), so AppKit routes those clicks through to whatever is
+beneath. Collapse-on-outside-click is a global `NSEvent` left-mouse-down monitor.
+Cost: one small self-contained override; benefit: zero window-frame animation and
+trivial positioning math.
 
 ---
 
