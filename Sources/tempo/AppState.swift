@@ -4,6 +4,7 @@ import Combine
 @MainActor
 final class AppState: ObservableObject {
     @Published var isExpanded = false
+    @Published var isHovered = false
     @Published var nowPlaying: NowPlaying? = nil
     @Published var artwork: NSImage? = nil
     @Published var sessions: [AgentSession] = []

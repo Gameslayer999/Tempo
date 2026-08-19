@@ -26,6 +26,14 @@ enum NotchGeometry {
     static let stripHeight: CGFloat = notchHeight
     static let panelWidth: CGFloat = notchWidth + sidePadding * 2
 
+    // Hover-grow amounts for the collapsed strip (boringNotch-style subtle
+    // grow on mouse-in). Width grows from panelWidth - hoverGrowWidth up to
+    // panelWidth (the window's own edge, since decision 008 keeps the window
+    // fixed-size — there is no room to grow past it), height grows downward
+    // by hoverGrowHeight from the real notch height.
+    static let hoverGrowWidth: CGFloat = 10
+    static let hoverGrowHeight: CGFloat = 4
+
     static var screenFrame: NSRect {
         targetScreen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
     }
@@ -101,8 +109,25 @@ final class NotchPanel: NSPanel {
         isMovable = false
         isReleasedWhenClosed = false
 
+        // The strip's hit-test rect always uses the hover-grown height (not
+        // just the resting stripHeight): if it used the resting size, the
+        // strip would grow on hover-in, push the mouse outside this rect,
+        // hitTest would return nil, AppKit would treat the mouse as having
+        // left the view, hover would drop, the strip would shrink back, the
+        // mouse would be back inside, and hover would re-trigger — a flicker
+        // loop. Sizing the passthrough rect for the grown state up front
+        // costs a few extra points of dead zone below the strip while it's
+        // not hovered, which is an acceptable trade for zero flicker. Width
+        // is already panelWidth (the window's own edge) in both hover states,
+        // so it needs no such adjustment.
+        let hoverGrowHeight = NotchGeometry.hoverGrowHeight
         let hostingView = PassthroughHostingView(
-            stripRect: CGRect(x: 0, y: panelHeight - stripHeight, width: panelWidth, height: stripHeight),
+            stripRect: CGRect(
+                x: 0,
+                y: panelHeight - stripHeight - hoverGrowHeight,
+                width: panelWidth,
+                height: stripHeight + hoverGrowHeight
+            ),
             fullRect: CGRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
             isExpandedProvider: { [weak state] in state?.isExpanded ?? false },
             rootView: content

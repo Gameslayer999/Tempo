@@ -39,8 +39,12 @@
 
 - [ ] **User verification pass** — run `.build/release/tempo`, approve the one-time
       Automation prompt (Tempo → Spotify), and check: strip hugs the notch; artwork +
-      visualizer render; click expands; controls work; agent lights match open
-      sessions; clicks outside the strip pass through to other apps.
+      visualizer render; hover subtly grows the strip (decision 009); click expands
+      into the Liquid Glass panel (decision 010); controls work; agent lights match
+      open sessions; clicks outside the strip pass through to other apps.
+- [ ] **Check PlaylistSection / AgentLightsView contrast on glass** — the glass
+      change added text shadows to ContentView's own controls only; the other two
+      views' legibility over a light desktop is unverified.
 - [ ] **Verify the OAuth flow live** — create the Spotify Developer app (README
       steps), add the Client ID to config.json, run Connect Spotify, add a song to a
       playlist. Fix whatever the first real round-trip surfaces.
@@ -54,6 +58,8 @@
 
 ## Later
 
+- [ ] Trackpad haptic tick on hover (boringNotch has one via `.sensoryFeedback`) —
+      deliberately left out of decision 009 as unrequested.
 - [ ] Apple Music support (AppleScript dictionary exists; artwork via `artworks` raw
       data instead of a URL).
 - [ ] Real audio-reactive visualizer (Core Audio process tap) — deferred per
@@ -70,6 +76,10 @@
 
 ## Recently completed
 
+- **2026-08-19** — Hover-grow on the collapsed strip (decision 009) and Liquid Glass
+  on the expanded panel (decision 010), after checking boringNotch's hover source and
+  Notchy's glass styling; `glassEffect` verified against the macOS 26.5 SDK with an
+  `.ultraThinMaterial` fallback.
 - **2026-08-19** — v1 features implemented in parallel (music service, visualizer,
   add-to-playlist, agent lights) against the scaffold's stub interfaces; one
   integration fix (actor isolation in `SpotifyWebAPI`'s NWListener callbacks); debug

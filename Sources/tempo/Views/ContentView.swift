@@ -16,6 +16,16 @@ struct ContentView: View {
     private let sidePadding = NotchGeometry.sidePadding
     private let panelWidth = NotchGeometry.panelWidth
     private let panelHeight = NotchGeometry.panelHeight
+    private let hoverGrowWidth = NotchGeometry.hoverGrowWidth
+    private let hoverGrowHeight = NotchGeometry.hoverGrowHeight
+
+    // boringNotch-style springy grow: quick but with a little overshoot.
+    private let hoverSpring = Animation.spring(response: 0.32, dampingFraction: 0.68, blendDuration: 0)
+
+    // Hover-grow only applies to the collapsed strip, never the expanded panel.
+    private var isHoverGrown: Bool { state.isHovered && !state.isExpanded }
+    private var collapsedWidth: CGFloat { isHoverGrown ? panelWidth : panelWidth - hoverGrowWidth }
+    private var collapsedHeight: CGFloat { isHoverGrown ? stripHeight + hoverGrowHeight : stripHeight }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,20 +38,53 @@ struct ContentView: View {
         .frame(width: panelWidth, height: panelHeight, alignment: .top)
         .background(backgroundShape, alignment: .top)
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: state.isExpanded)
+        .animation(hoverSpring, value: state.isHovered)
     }
 
-    // Black rounded-bottom-corners shape that visually merges with the
-    // physical notch. Only the bottom corners round; the top edge stays
-    // square and flush against the notch/menu bar.
+    // Rounded-bottom-corners shape that visually merges with the physical
+    // notch. Only the bottom corners round; the top edge stays square and
+    // flush against the notch/menu bar. Collapsed: pure black, always (UI
+    // Principle #6 — must keep merging with the notch, never glass).
+    // Expanded: Liquid Glass body (macOS 26+) with a black-to-glass blend at
+    // the top so the seam against the notch stays black.
     private var backgroundShape: some View {
-        UnevenRoundedRectangle(
+        let shape = UnevenRoundedRectangle(
             topLeadingRadius: 0,
             bottomLeadingRadius: state.isExpanded ? 14 : 10,
             bottomTrailingRadius: state.isExpanded ? 14 : 10,
             topTrailingRadius: 0
         )
-        .fill(Color.black)
-        .frame(width: panelWidth, height: state.isExpanded ? panelHeight : stripHeight, alignment: .top)
+        return Group {
+            if state.isExpanded {
+                expandedBackground(shape: shape)
+            } else {
+                shape
+                    .fill(Color.black)
+                    .frame(width: collapsedWidth, height: collapsedHeight, alignment: .top)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func expandedBackground(shape: UnevenRoundedRectangle) -> some View {
+        ZStack(alignment: .top) {
+            glassLayer(shape: shape)
+            // Blend the top of the panel to black so it keeps merging with
+            // the notch strip directly above it; the glass takes over below.
+            LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                .frame(height: stripHeight + 20)
+        }
+        .frame(width: panelWidth, height: panelHeight, alignment: .top)
+        .clipShape(shape)
+    }
+
+    @ViewBuilder
+    private func glassLayer(shape: UnevenRoundedRectangle) -> some View {
+        if #available(macOS 26.0, *) {
+            Color.clear.glassEffect(.regular, in: shape)
+        } else {
+            shape.fill(.ultraThinMaterial)
+        }
     }
 
     // MARK: Collapsed strip
@@ -55,8 +98,11 @@ struct ContentView: View {
             VisualizerView(isPlaying: state.nowPlaying?.isPlaying ?? false)
                 .frame(width: sidePadding, height: stripHeight)
         }
-        .frame(width: panelWidth, height: stripHeight)
+        .frame(width: collapsedWidth, height: collapsedHeight, alignment: .top)
         .contentShape(Rectangle())
+        .onHover { hovering in
+            state.isHovered = hovering
+        }
         .onTapGesture {
             state.isExpanded.toggle()
         }
@@ -92,6 +138,7 @@ struct ContentView: View {
                     .foregroundColor(.gray)
                     .lineLimit(1)
             }
+            .shadow(color: .black.opacity(0.5), radius: 3)
 
             HStack(spacing: 28) {
                 Button(action: { music.previousTrack() }) {
@@ -107,6 +154,7 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .foregroundColor(.white)
             .font(.system(size: 16, weight: .medium))
+            .shadow(color: .black.opacity(0.5), radius: 3)
 
             PlaylistSection(api: api, state: state)
             AgentLightsView(sessions: state.sessions)

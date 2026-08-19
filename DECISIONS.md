@@ -19,6 +19,8 @@
 | 006 | 2026-08-19 | Window: non-activating borderless NSPanel hugging the physical notch; click toggles collapsed/expanded | Accepted |
 | 007 | 2026-08-19 | Repository: private GitHub repo `Gameslayer999/Tempo`; v1 scope is Spotify-only | Accepted |
 | 008 | 2026-08-19 | Panel sizing: one static NSPanel at expanded size; SwiftUI animates content; custom `hitTest` passthrough outside the drawn shape | Accepted |
+| 009 | 2026-08-19 | Hover-grow: strip expands ~10×4pt on hover (boringNotch-style spring); passthrough rect is always the hover-grown size so flicker is structurally impossible | Accepted |
+| 010 | 2026-08-19 | Liquid Glass: expanded panel uses macOS 26 `glassEffect` (`.ultraThinMaterial` fallback) with a black-to-glass top gradient; collapsed strip stays pure black | Accepted |
 
 ---
 
@@ -206,3 +208,56 @@ trivial positioning math.
 - **Spotify only** in v1 — Apple Music support queued in `NEXT_STEPS.md`.
 - Docs structure (CLAUDE.md / DECISIONS.md / NEXT_STEPS.md / README.md) carried over
   from AgentStatus, adapted to Tempo.
+
+---
+
+## 009 — Hover-grow with an always-grown passthrough rect
+
+**Date:** 2026-08-19 · **Status:** Accepted
+
+**Context.** The collapsed strip should subtly expand on mouse hover, like
+boringNotch. boringNotch (checked at source: `boringNotch/ContentView.swift`) tracks
+hover via `.onHover` and uses `interactiveSpring(response: ~0.38, dampingFraction:
+0.8)` for its transitions; it has no distinct "grow while collapsed" state (hover
+either adds a shadow or fully opens after a delay), so Tempo's subtle-grow is our own
+blend of that feel.
+
+**Choice.**
+- `AppState.isHovered`; strip grows 10pt in width and 4pt in height (top-pinned, so
+  the notch seam never moves) with `spring(response: 0.32, dampingFraction: 0.68)`.
+  Grow is inert while expanded. Because decision 008 fixed the window at expanded
+  size, width growth headroom comes from resting the strip 10pt narrower than the
+  panel, at the undrawn outer edges.
+- **Hit-test strategy:** the passthrough strip rect always uses the hover-grown
+  dimensions. A rect that tracked hover state could flicker (grow → pointer outside
+  original rect → hover lost → shrink → repeat); a permanently grown rect makes that
+  loop structurally impossible at the cost of ~4pt of inert zone below the strip.
+- Trackpad haptic feedback on hover (boringNotch has it) was deliberately left out
+  as unrequested; queued in `NEXT_STEPS.md` under Later.
+
+---
+
+## 010 — Liquid Glass expanded panel, black collapsed strip
+
+**Date:** 2026-08-19 · **Status:** Accepted
+
+**Context.** The user wants Tempo to match macOS 26's Liquid Glass design language,
+citing Notchy — whose look is "a premium, Apple-like Liquid Glass aesthetic built
+purely in SwiftUI" applied to the expanded island while the collapsed shape stays
+solid.
+
+**Choice.**
+- The **collapsed strip stays pure black unconditionally** — it must merge with the
+  physical notch (UI Principle #6); glass there would break the illusion.
+- The **expanded panel** background is `Color.clear.glassEffect(.regular, in: shape)`
+  — the real SwiftUI Liquid Glass API, verified against this machine's macOS 26.5
+  SDK (`macOS 26.0+`, `SwiftUICore`) rather than search results — gated behind
+  `#available(macOS 26.0, *)` with `shape.fill(.ultraThinMaterial)` as the fallback,
+  so `Package.swift` stays at `.macOS(.v14)`.
+- A black→transparent `LinearGradient` covers the top `stripHeight + 20`pt of the
+  expanded panel so the seam against the notch stays black and fades into glass.
+- Track/artist text and transport buttons gained a subtle black shadow for contrast
+  against light desktops showing through the glass. `PlaylistSection` /
+  `AgentLightsView` contrast on glass is unverified (their files weren't in scope) —
+  flagged in `NEXT_STEPS.md`.
+- No theme toggle — glass is simply the look (Notchy documents no toggle either).
