@@ -19,7 +19,7 @@ so it stays expanded; click anywhere outside to unpin and collapse.
 
 The expanded view is a Liquid Glass panel (macOS 26's design language; frosted
 material on older macOS) opening below the notch:
-- music controls: play / pause / previous / next
+- music controls: play / pause / previous / next (buttons grow slightly on hover)
 - **add the current song to a Spotify playlist**
 - **agent session lights** — one colored light per open Claude Code session
   (🟢 running · 🟠 blocked, needs you · ⚪ idle · 🔴 error), read from

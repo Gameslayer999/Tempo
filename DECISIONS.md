@@ -293,3 +293,16 @@ and collapse. The user also asked for the haptic tick 009 had deliberately omitt
   jitter case remains: a pointer outrunning the ~0.35s spring into not-yet-rendered
   panel area can fire a spurious hover-out, absorbed by a 0.15s cancellable hover-out
   debounce (hover-in is never delayed).
+
+**Addendum (2026-08-19, bug fix).** The pin `.onTapGesture` as shipped never fired:
+it lived on the `.background()` glass layer, and SwiftUI does not route taps to a
+background-layer gesture when a foreground view with its own `contentShape` sits in
+front — verified at runtime with temporary logging and synthesized CGEvents (the
+AppKit `mouseDown` reached the window with `displayedExpanded=true`; the background
+tap closure never ran). Moved the gesture to the foreground content container
+(guarded on `displayedExpanded`), whose hit-reachability the hover logs had already
+proven; buttons/menus still claim their own taps first per SwiftUI's
+descendant-priority rule. Also noted for future UI debugging: this dev shell has
+Accessibility (synthetic clicks work) but not Screen Recording (no screenshots), and
+raw CGEventPost against this non-activating overlay window class is unreliable —
+post-fix behavior was verified structurally.

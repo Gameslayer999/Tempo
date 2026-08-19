@@ -36,6 +36,7 @@ struct PlaylistSection: View {
         }
         .buttonStyle(.plain)
         .foregroundColor(.white.opacity(0.85))
+        .hoverScale()
     }
 
     private var playlistRow: some View {
@@ -56,6 +57,7 @@ struct PlaylistSection: View {
             .menuStyle(.borderlessButton)
             .frame(maxWidth: 220)
             .disabled(api.playlists.isEmpty)
+            .hoverScale()
 
             Spacer(minLength: 4)
 
@@ -100,6 +102,7 @@ struct PlaylistSection: View {
         .font(.system(size: 13, weight: .medium))
         .disabled(!canAdd || isAdding)
         .opacity(canAdd ? 1 : 0.35)
+        .hoverScale()
     }
 
     private var canAdd: Bool {

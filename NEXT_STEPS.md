@@ -75,6 +75,11 @@
 
 ## Recently completed
 
+- **2026-08-19** — Pin bug fixed (011 addendum): the pin tap gesture sat on the
+  `.background()` glass layer, which SwiftUI never routes taps to — proven at runtime
+  with synthesized CGEvents — and was moved to the foreground content container. All
+  interactive controls (transport, playlist menu/add, Connect) now spring-scale
+  1.15× on hover via a shared `hoverScale()` modifier.
 - **2026-08-19** — Interaction model reworked (decision 011, revising 009): hover
   fully expands with a trackpad haptic tick, mouse-off collapses (0.15s debounce),
   click pins, click outside unpins; the 10×4pt hover-grow and its dead-zone

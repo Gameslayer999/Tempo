@@ -13,7 +13,7 @@ import SwiftUI
 ///   view immediately (with a haptic tick on the collapsed → hover-expand
 ///   transition), matching what a click used to show.
 /// - Hover-out collapses back to the strip, unless a click pinned it open.
-/// - A click on the expanded panel's background (not on a control) pins it:
+/// - A click anywhere on the expanded panel that isn't a control pins it:
 ///   `state.isExpanded` becomes true and it now survives mouse-out.
 /// - A click outside the panel (handled in NotchWindow.swift's global
 ///   monitor) unpins and clears hover, collapsing it.
@@ -50,6 +50,24 @@ struct ContentView: View {
             .frame(width: panelWidth, height: displayedExpanded ? panelHeight : stripHeight, alignment: .top)
             .contentShape(Rectangle())
             .onHover(perform: handleHover)
+            .onTapGesture {
+                // A click anywhere on the expanded panel that isn't a
+                // control pins it open. This gesture lives on the
+                // foreground content container (not the `.background()`
+                // glass layer) — SwiftUI's gesture hit-testing is driven by
+                // the frontmost view's contentShape, so a gesture on a
+                // `.background()` view sitting behind this content never
+                // receives the tap even though the point is visually over
+                // it (verified: the AppKit mouseDown reaches the window,
+                // but no SwiftUI tap fires there). `.contentShape(Rectangle())`
+                // above makes empty space, text, and artwork gaps tappable;
+                // Buttons and the playlist Menu still claim their own taps
+                // first, so controls are unaffected. Only pins once the
+                // panel is actually displayed-expanded (hover already
+                // happened), matching the pre-fix scope.
+                guard displayedExpanded else { return }
+                state.isExpanded = true
+            }
             Spacer(minLength: 0)
         }
         .frame(width: panelWidth, height: panelHeight, alignment: .top)
@@ -116,18 +134,6 @@ struct ContentView: View {
         }
         .frame(width: panelWidth, height: panelHeight, alignment: .top)
         .clipShape(shape)
-        .contentShape(shape)
-        .onTapGesture {
-            // A click anywhere on the expanded panel's background layer
-            // pins it open. This gesture lives on the background, which is
-            // rendered behind the strip/controls stack (see `body`'s
-            // `.background(backgroundShape)`) — transport buttons, the
-            // playlist menu, and the Connect button sit in front of it and
-            // consume their own taps first, so only points the foreground
-            // content doesn't claim (empty space, text, artwork, gaps)
-            // fall through to pin here.
-            state.isExpanded = true
-        }
     }
 
     @ViewBuilder
@@ -189,12 +195,15 @@ struct ContentView: View {
                 Button(action: { music.previousTrack() }) {
                     Image(systemName: "backward.fill")
                 }
+                .hoverScale()
                 Button(action: { music.playPause() }) {
                     Image(systemName: (state.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
                 }
+                .hoverScale()
                 Button(action: { music.nextTrack() }) {
                     Image(systemName: "forward.fill")
                 }
+                .hoverScale()
             }
             .buttonStyle(.plain)
             .foregroundColor(.white)
