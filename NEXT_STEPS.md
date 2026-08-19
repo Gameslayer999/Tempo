@@ -7,33 +7,43 @@
 
 ## Current state
 
-- **Docs bootstrapped, repo created (2026-08-19).** CLAUDE.md / DECISIONS.md /
-  NEXT_STEPS.md / README.md carried over from AgentStatus and adapted to Tempo.
-  Architecture decided (decisions 001–007): SwiftUI/AppKit via SwiftPM, AppleScript
-  to Spotify for now-playing + transport, Spotify Web API (PKCE) for add-to-playlist,
-  playback-synced visualizer, read-only AgentStatus status-file consumption,
-  non-activating NSPanel at the notch. No app code yet.
+- **v1 feature set implemented and building clean (2026-08-19).** `swift build` (debug
+  and release) exits 0 with zero warnings; the app runs as an accessory-policy process
+  drawing a notch-hugging non-activating NSPanel (decisions 006/008). Implemented:
+  - **Spotify now-playing + transport** (`Services/MusicService.swift`) — 1s AppleScript
+    poll (compiled once, reused), guarded by `NSRunningApplication` so Spotify is never
+    launched as a side effect; artwork downloaded off-main when the URL changes;
+    play/pause/prev/next with an immediate re-poll after each command. Fetch script and
+    `playpause` verified live against the real Spotify app (see decision 002 addendum,
+    including the `st` variable-name gotcha).
+  - **Visualizer** (`Views/VisualizerView.swift`) — 5 capsule bars, per-bar layered
+    sine functions driven by `TimelineView(.animation)` (no timers); eases to
+    motionless stubs over 0.35s when paused (decision 004).
+  - **Add-to-playlist** (`Services/SpotifyWebAPI.swift`, `Views/PlaylistSection.swift`)
+    — PKCE per decision 003: config + tokens in `~/Library/Application Support/Tempo/`
+    (0600/0700), one-shot NWListener on 127.0.0.1:8888, rotating refresh tokens,
+    playlist pagination capped at 200, compact picker + add-button row with transient
+    success/failure feedback. Hides entirely when unconfigured. **The live OAuth
+    round-trip is unverified** — no Client ID is configured on this machine yet.
+  - **AgentStatus lights** (`Services/AgentStatusService.swift`,
+    `Views/AgentLightsView.swift`) — read-only 2s poll of
+    `~/.claude/status/sessions/*.json` (parsing verified against a live file), 2h
+    staleness cutoff, attention-first sort, blocked lights pulse, unknown states render
+    as hollow rings, feature hides when the directory is absent (decision 005).
+- **Not yet verified by a human:** the panel's visual alignment with the physical
+  notch, expand/collapse feel, click-through behavior, transport buttons end-to-end
+  from the UI, and the full OAuth flow. Automated checks stop at "builds clean, runs,
+  stays alive, AppleScript/status parsing verified at the shell level".
 
 ## Now
 
-- [ ] **Scaffold the app** — SwiftPM executable target; Accessory-policy app;
-      non-activating NSPanel positioned at the notch (real geometry from `NSScreen`
-      auxiliary areas, fallback for notchless displays); SwiftUI hosting; click
-      toggles collapsed ↔ expanded with animation; click-outside collapses.
-- [ ] **Spotify now-playing + transport** — AppleScript service (guarded by
-      "Spotify running"), poll track/artist/state/artwork-url; artwork download;
-      play/pause/prev/next; collapsed strip shows artwork left of the notch.
-- [ ] **Visualizer** — Dynamic-Island-style animated bars right of the notch;
-      animate while playing, settle when paused.
-- [ ] **Add-to-playlist** — PKCE OAuth (user-supplied Client ID, loopback redirect),
-      token store in `~/Library/Application Support/Tempo/` (0600), playlist list +
-      add-current-track in the expanded view; feature hides when unconfigured.
-- [ ] **AgentStatus lights** — read `~/.claude/status/sessions/*.json`, render
-      state-colored lights in the expanded view; stale sessions dimmed/dropped;
-      feature hides when the directory is absent.
-- [ ] **Verify end-to-end on this machine** — `swift build` clean; panel hugs the
-      real notch; Spotify controls work against the real app; lights match live
-      Claude Code sessions.
+- [ ] **User verification pass** — run `.build/release/tempo`, approve the one-time
+      Automation prompt (Tempo → Spotify), and check: strip hugs the notch; artwork +
+      visualizer render; click expands; controls work; agent lights match open
+      sessions; clicks outside the strip pass through to other apps.
+- [ ] **Verify the OAuth flow live** — create the Spotify Developer app (README
+      steps), add the Client ID to config.json, run Connect Spotify, add a song to a
+      playlist. Fix whatever the first real round-trip surfaces.
 
 ## Next
 
@@ -56,11 +66,16 @@
 
 ## Decisions needed
 
-- None currently open. (Spotify-only scope, visualizer approach, PKCE flow, and repo
-  visibility were all decided by the user on 2026-08-19 — see decisions 003/004/007.)
+- None currently open.
 
 ## Recently completed
 
+- **2026-08-19** — v1 features implemented in parallel (music service, visualizer,
+  add-to-playlist, agent lights) against the scaffold's stub interfaces; one
+  integration fix (actor isolation in `SpotifyWebAPI`'s NWListener callbacks); debug
+  and release builds clean.
+- **2026-08-19** — Scaffold: SwiftPM app shell, notch NSPanel with `hitTest`
+  passthrough (decision 008), stubbed services, smoke-tested.
 - **2026-08-19** — Project bootstrapped: docs carried over from AgentStatus and
   adapted, architecture decisions 001–007 logged, pushed to the private repo
   `Gameslayer999/Tempo`.

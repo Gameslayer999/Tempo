@@ -4,8 +4,9 @@ A dynamic notch for macOS — in the spirit of boringNotch and NotchNook — tha
 the MacBook notch into a glanceable surface for **music** and **live AI-agent
 session status**.
 
-> **Status: pre-alpha.** Architecture decided, scaffold in progress. See
-> `NEXT_STEPS.md` for the live build queue.
+> **Status: pre-alpha.** The v1 feature set is implemented and builds clean; it is
+> awaiting live user verification (notch alignment, transport buttons, OAuth flow).
+> See `NEXT_STEPS.md` for the live build queue.
 
 ## What it does (v1)
 

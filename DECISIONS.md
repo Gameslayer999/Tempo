@@ -73,6 +73,14 @@ Requires the one-time macOS Automation permission prompt (Tempo → Spotify), wh
 documented in the README. The Web API is reserved for the one thing AppleScript
 cannot do: modifying playlists (decision 003).
 
+**Addendum (2026-08-19, verified gotcha).** Inside a `tell application "Spotify"`
+block, a variable named `st` fails to compile (`Expected expression but found "st".
+(-2741)`) — it collides with an undocumented term in Spotify's scripting dictionary.
+Use descriptive variable names (e.g. `playerState`) in any AppleScript sent to
+Spotify. The fetch script and `playpause` were verified live against the running
+Spotify app on this machine; `next track`/`previous track` share the verified
+command shape but were not exercised (would have skipped the user's actual song).
+
 ---
 
 ## 003 — Add-to-playlist: Spotify Web API, OAuth 2.0 PKCE
