@@ -34,6 +34,7 @@
 | 021 | 2026-08-20 | Visualizer reads the tap's buffer in the aggregate input list, not buffer 0 — buffer 0 is the output device's microphone whenever it has one — fixes 016 | Accepted |
 | 022 | 2026-08-20 | Fullscreen: drop the panel below the top edge to dodge macOS's chrome reveal | **Reverted** same day — pill sits at the notch |
 | 023 | 2026-08-20 | Settings Music pane is a guided 3-step setup (dashboard link, redirect-URI copy, Client ID); the developer app itself cannot be removed — Spotify's AppleScript dictionary has no playlist support | Accepted |
+| 024 | 2026-08-20 | Visualizer claims the play state on appear without starting a transition — `.task(id:)` fires on appear, which froze the bars at full playing height on a paused launch — fixes 004/016 | Accepted |
 | 025 | 2026-08-20 | A minimal `NSApp.mainMenu` (app + Edit) so the Settings text field accepts ⌘V/⌘C/⌘X/⌘A — an accessory app has no main menu, and AppKit routes editing key equivalents through it | Accepted |
 | 026 | 2026-08-20 | Playlist picker lists only playlists the user can add to (owned or collaborative), and add-failures report Spotify's actual reason — amends 003 | Accepted |
 | 027 | 2026-08-20 | Playlist search lives in Settings (searchable list + chosen favorites), not in the notch panel — the panel stays non-key | Accepted |
