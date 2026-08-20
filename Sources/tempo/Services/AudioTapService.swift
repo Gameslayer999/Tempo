@@ -142,6 +142,9 @@ private final class TapProcessor: @unchecked Sendable {
 
     private var ringWrite = 0
     private var wasSilent = true
+    /// Index of the *tap's* buffer inside the aggregate device's input buffer
+    /// list. See `AudioTapService.tapBufferIndex(...)` — it is not always 0.
+    private var tapBuffer = 0
 
     init?(wake: DispatchSourceUserDataAdd) {
         guard let setup = vDSP_create_fftsetup(fftLog2n, FFTRadix(kFFTRadix2)) else { return nil }
@@ -176,6 +179,12 @@ private final class TapProcessor: @unchecked Sendable {
         binHi.deallocate()
     }
 
+    /// Points the DSP at the buffer the tap actually occupies. Called on the
+    /// main thread before the IO proc starts, never while it is running.
+    func configure(tapBufferIndex: Int) {
+        tapBuffer = max(0, tapBufferIndex)
+    }
+
     /// Recomputes band bin ranges for the tap's actual sample rate. Called on
     /// the main thread before the IO proc starts, never while it is running.
     func configure(sampleRate: Double) {
@@ -204,18 +213,23 @@ private final class TapProcessor: @unchecked Sendable {
 
     func process(_ bufferList: UnsafePointer<AudioBufferList>) {
         let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferList))
-        guard abl.count > 0, let data = abl[0].mData else { return }
+        // `tapBuffer`, never 0 blindly: the aggregate's input buffer list is
+        // its sub-device's input streams *first*, the tap's streams after
+        // (see AudioTapService.tapBufferIndex). Reading buffer 0 unconditionally
+        // meant that whenever the default output device also carries an input
+        // stream, Tempo analysed that device's microphone instead of Spotify.
+        guard abl.count > tapBuffer, let data = abl[tapBuffer].mData else { return }
 
-        let channels = max(1, Int(abl[0].mNumberChannels))
-        let sampleCount = Int(abl[0].mDataByteSize) / MemoryLayout<Float>.size
+        let channels = max(1, Int(abl[tapBuffer].mNumberChannels))
+        let sampleCount = Int(abl[tapBuffer].mDataByteSize) / MemoryLayout<Float>.size
         let frames = sampleCount / channels
         guard frames > 0 else { return }
 
         let left = data.assumingMemoryBound(to: Float.self)
         // Non-interleaved taps split channels across buffers; the observed tap
         // is one interleaved stereo buffer. Both mix down to mono here.
-        let right: UnsafeMutablePointer<Float>? = (channels == 1 && abl.count > 1)
-            ? abl[1].mData?.assumingMemoryBound(to: Float.self)
+        let right: UnsafeMutablePointer<Float>? = (channels == 1 && abl.count > tapBuffer + 1)
+            ? abl[tapBuffer + 1].mData?.assumingMemoryBound(to: Float.self)
             : nil
 
         var offset = 0
@@ -448,7 +462,8 @@ final class AudioTapService: ObservableObject {
             processor.configure(sampleRate: format.mSampleRate)
         }
 
-        guard let outputUID = Self.defaultOutputUID() else {
+        guard let outputDevice = Self.defaultOutputDevice(),
+              let outputUID = Self.deviceUID(outputDevice) else {
             _ = AudioHardwareDestroyProcessTap(tap)
             return
         }
@@ -474,6 +489,7 @@ final class AudioTapService: ObservableObject {
             return
         }
 
+        processor.configure(tapBufferIndex: Self.tapBufferIndex(aggregate: aggregate, subDevice: outputDevice))
         processor.reset()
         var proc: AudioDeviceIOProcID?
         let created = AudioDeviceCreateIOProcIDWithBlock(&proc, aggregate, ioQueue) { _, input, _, _, _ in
@@ -620,7 +636,7 @@ final class AudioTapService: ObservableObject {
         return status == noErr && running != 0
     }
 
-    private static func defaultOutputUID() -> String? {
+    private static func defaultOutputDevice() -> AudioObjectID? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -629,7 +645,10 @@ final class AudioTapService: ObservableObject {
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         guard AudioObjectGetPropertyData(systemObject, &address, 0, nil, &size, &device) == noErr,
               device != 0 else { return nil }
+        return device
+    }
 
+    private static func deviceUID(_ device: AudioObjectID) -> String? {
         var uidAddress = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceUID,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -641,5 +660,48 @@ final class AudioTapService: ObservableObject {
         }
         guard status == noErr, let uid else { return nil }
         return uid as String
+    }
+
+    /// Number of buffers a device contributes to an IO proc's input buffer
+    /// list, read from its input stream configuration.
+    private static func inputBufferCount(_ device: AudioObjectID) -> Int {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size > 0 else {
+            return 0
+        }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 16)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, raw) == noErr else { return 0 }
+        return UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self)).count
+    }
+
+    /// Where the tap's audio sits in the aggregate's input buffer list.
+    ///
+    /// The aggregate is one sub-device (the default output device) plus our
+    /// process tap, and the IO proc receives the **sub-device's input streams
+    /// first, the tap's streams after them**. Verified on macOS 26.6 by
+    /// building the exact aggregate this file builds and reading its input
+    /// stream configuration: with an output-only sub-device the layout is one
+    /// 2-channel buffer (the tap, at index 0); adding a sub-device that also
+    /// has an input stream makes it `[1, 2]` — the device's 1-channel
+    /// microphone at index 0 and the tap at index 1.
+    ///
+    /// So index 0 is the tap only by luck of the user's current output device.
+    /// Whenever that device also carries an input stream — a headset in call
+    /// mode, or the virtual input+output device meeting apps install — buffer 0
+    /// is a **microphone**, and reading it made the visualizer dance to the
+    /// room instead of to Spotify (and put mic audio through the FFT, which
+    /// Tempo must never do).
+    ///
+    /// Falls back to 0 if the layout can't be read or looks unexpected; the
+    /// `abl.count > tapBuffer` guard in `TapProcessor.process` covers the rest.
+    private static func tapBufferIndex(aggregate: AudioObjectID, subDevice: AudioObjectID) -> Int {
+        let offset = inputBufferCount(subDevice)
+        guard offset > 0, inputBufferCount(aggregate) > offset else { return 0 }
+        return offset
     }
 }

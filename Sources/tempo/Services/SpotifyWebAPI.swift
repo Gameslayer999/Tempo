@@ -15,10 +15,17 @@ final class SpotifyWebAPI: ObservableObject {
     @Published var isConfigured = false   // config.json with client id exists
     @Published var isAuthed = false       // have a refresh token
     @Published var playlists: [SpotifyPlaylist] = []
+    /// Why the last add-to-playlist failed, for the UI to show. `nil` after a
+    /// success. Never contains a token — only Spotify's own error message.
+    @Published private(set) var lastAddError: String?
+
+    /// The signed-in user's Spotify id, needed to tell an owned playlist from
+    /// a merely *followed* one — `/me/playlists` returns both.
+    private var currentUserID: String?
 
     // MARK: Constants
 
-    private static let redirectURI = "http://127.0.0.1:8888/callback"
+    static let redirectURI = "http://127.0.0.1:8888/callback"
     private static let callbackPort: UInt16 = 8888
     private static let scopes = "playlist-read-private playlist-modify-private playlist-modify-public"
     private static let authorizeURL = "https://accounts.spotify.com/authorize"
@@ -40,7 +47,7 @@ final class SpotifyWebAPI: ObservableObject {
     private var pendingState: String?
     private var callbackListener: NWListener?
 
-    private struct Config: Decodable {
+    private struct Config: Codable {
         var spotify_client_id: String
     }
 
@@ -79,6 +86,53 @@ final class SpotifyWebAPI: ObservableObject {
             tokens = stored
             isAuthed = true
         }
+    }
+
+    // MARK: Client ID configuration (Settings window)
+
+    /// The configured Client ID, for the Settings field to show. Not a secret
+    /// (it is public per Spotify's PKCE flow) — unlike the tokens, which are
+    /// never exposed.
+    var configuredClientID: String { clientID ?? "" }
+
+    /// Writes `config.json` with the given Client ID and reloads config state,
+    /// replacing the manual file-editing step the README used to require
+    /// (Agent Guideline #8). An empty/whitespace id clears the configuration
+    /// instead. Changing the id to a *different* app invalidates any tokens we
+    /// hold — they were issued to the old client — so those are dropped too.
+    func saveClientID(_ raw: String) {
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return clearConfiguration() }
+        guard id != clientID else { return }
+
+        let fm = FileManager.default
+        ensureSupportDir()
+        guard let data = try? JSONEncoder().encode(Config(spotify_client_id: id)) else { return }
+        fm.createFile(atPath: Self.configFile.path, contents: data, attributes: [.posixPermissions: 0o600])
+
+        if clientID != nil { disconnect() }
+        clientID = id
+        isConfigured = true
+    }
+
+    /// Removes `config.json` and any tokens issued under it: back to the
+    /// unconfigured state, where every entry point here is inert.
+    func clearConfiguration() {
+        try? FileManager.default.removeItem(at: Self.configFile)
+        disconnect()
+        clientID = nil
+        isConfigured = false
+    }
+
+    /// Forgets the stored refresh/access tokens. The Spotify-side grant is not
+    /// revoked (that needs the user's account page); this only drops our copy.
+    func disconnect() {
+        try? FileManager.default.removeItem(at: Self.tokensFile)
+        tokens = nil
+        isAuthed = false
+        playlists = []
+        currentUserID = nil
+        lastAddError = nil
     }
 
     // MARK: connect() — begin PKCE flow
@@ -265,12 +319,17 @@ final class SpotifyWebAPI: ObservableObject {
 
     // MARK: Token persistence (0600 file, 0700 dir)
 
-    private func persistTokens(_ stored: StoredTokens) {
+    private func ensureSupportDir() {
         let fm = FileManager.default
         let dir = Self.supportDir
         if !fm.fileExists(atPath: dir.path) {
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         }
+    }
+
+    private func persistTokens(_ stored: StoredTokens) {
+        let fm = FileManager.default
+        ensureSupportDir()
         guard let data = try? JSONEncoder().encode(stored) else { return }
         fm.createFile(atPath: Self.tokensFile.path, contents: data, attributes: [.posixPermissions: 0o600])
     }
@@ -280,8 +339,18 @@ final class SpotifyWebAPI: ObservableObject {
     /// GETs the user's playlists, following `next` pagination up to a ~200
     /// item cap. Any failure along the way leaves `playlists` untouched
     /// silently rather than throwing.
+    ///
+    /// Only playlists the user can actually add to are kept: `/me/playlists`
+    /// returns **followed** playlists alongside owned ones, and Spotify answers
+    /// 403 for a POST to someone else's non-collaborative playlist. Listing
+    /// those was a lying signal (UI Principle #4) — and since the picker
+    /// defaults to the first row, the default was very often a playlist that
+    /// could never work. Observed on this account: 48 playlists, of which the
+    /// first was someone else's.
     func loadPlaylists() async {
         guard isAuthed, await refreshIfNeeded(), let accessToken = tokens?.accessToken else { return }
+        if currentUserID == nil { currentUserID = await fetchCurrentUserID(accessToken: accessToken) }
+        guard let currentUserID else { return }
 
         var results: [SpotifyPlaylist] = []
         var next: String? = "\(Self.apiBase)/me/playlists?limit=50"
@@ -299,6 +368,8 @@ final class SpotifyWebAPI: ObservableObject {
 
             results.append(contentsOf: page.items.compactMap { item in
                 guard let id = item.id, let name = item.name else { return nil }
+                let isOwned = item.owner?.id == currentUserID
+                guard isOwned || item.collaborative == true else { return nil }
                 return SpotifyPlaylist(id: id, name: name)
             })
             next = page.next
@@ -314,13 +385,47 @@ final class SpotifyWebAPI: ObservableObject {
     private struct PlaylistItem: Decodable {
         var id: String?
         var name: String?
+        var collaborative: Bool?
+        var owner: Owner?
+
+        struct Owner: Decodable { var id: String? }
+    }
+
+    private struct CurrentUser: Decodable { var id: String }
+
+    /// One GET /me, cached for the process: the id never changes while the
+    /// same account is connected, and it is cleared on disconnect.
+    private func fetchCurrentUserID(accessToken: String) async -> String? {
+        guard let url = URL(string: "\(Self.apiBase)/me") else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let user = try? JSONDecoder().decode(CurrentUser.self, from: data) else { return nil }
+        return user.id
     }
 
     // MARK: add(trackURI:toPlaylist:)
 
+    /// Adds one track. On failure, records *why* in `lastAddError` instead of
+    /// only returning false: a bare warning triangle with no reason was
+    /// unactionable (Agent Guideline #11), and the reason is usually something
+    /// the user can act on — a playlist they don't own, an expired session, a
+    /// local file that has no Spotify URI.
     @discardableResult
     func add(trackURI: String, toPlaylist playlistID: String) async -> Bool {
-        guard isAuthed, await refreshIfNeeded(), let accessToken = tokens?.accessToken else { return false }
+        lastAddError = nil
+
+        guard trackURI.hasPrefix("spotify:track:") || trackURI.hasPrefix("spotify:episode:") else {
+            // Local files come back from AppleScript as `spotify:local:…` and
+            // cannot be added through the Web API at all.
+            lastAddError = "This track isn't in Spotify's catalogue (local file), so it can't be added."
+            return false
+        }
+        guard isAuthed, await refreshIfNeeded(), let accessToken = tokens?.accessToken else {
+            lastAddError = "Spotify session expired — reconnect in Settings ▸ Music."
+            return false
+        }
         guard let url = URL(string: "\(Self.apiBase)/playlists/\(playlistID)/tracks") else { return false }
 
         var request = URLRequest(url: url)
@@ -330,9 +435,40 @@ final class SpotifyWebAPI: ObservableObject {
         guard let body = try? JSONEncoder().encode(["uris": [trackURI]]) else { return false }
         request.httpBody = body
 
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse else { return false }
-        return http.statusCode == 200 || http.statusCode == 201
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse else {
+            lastAddError = "Couldn't reach Spotify. Check your connection."
+            return false
+        }
+        if http.statusCode == 200 || http.statusCode == 201 { return true }
+
+        lastAddError = Self.addFailureMessage(status: http.statusCode, body: data)
+        return false
+    }
+
+    /// Turns a failed response into something the user can act on. Spotify's
+    /// own `error.message` is included when present; it never carries
+    /// credentials.
+    private static func addFailureMessage(status: Int, body: Data) -> String {
+        struct APIError: Decodable {
+            struct Inner: Decodable { var message: String? }
+            var error: Inner?
+        }
+        let detail = (try? JSONDecoder().decode(APIError.self, from: body))?.error?.message
+
+        switch status {
+        case 401:
+            return "Spotify rejected the session — reconnect in Settings ▸ Music."
+        case 403:
+            return detail ?? "You can't add to that playlist — it isn't yours and isn't collaborative."
+        case 404:
+            return "That playlist no longer exists."
+        case 429:
+            return "Spotify is rate-limiting Tempo. Try again shortly."
+        default:
+            if let detail { return "Spotify said: \(detail) (HTTP \(status))" }
+            return "Spotify refused the request (HTTP \(status))."
+        }
     }
 
     // MARK: PKCE helpers

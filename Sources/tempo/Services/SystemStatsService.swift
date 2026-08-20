@@ -55,6 +55,14 @@ final class SystemStatsService: ObservableObject {
         sample()
     }
 
+    /// Stops sampling entirely (the usage module is switched off in Settings).
+    /// The history is kept, so switching it back on redraws the sparklines
+    /// from what was already collected instead of starting blank.
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
     private func sample() {
         sampleCPU()
         sampleMemory()

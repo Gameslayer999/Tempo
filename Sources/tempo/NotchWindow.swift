@@ -29,11 +29,25 @@ enum NotchGeometry {
     static let notchHeight: CGFloat = raw.height
     static let stripHeight: CGFloat = notchHeight
 
+    /// Vertical inset above and below the wing squares.
+    static let contentInset: CGFloat = 6
     /// Side of the artwork / visualizer square that sits in each wing.
-    static let contentSquare: CGFloat = max(stripHeight - 10, 0)
-    /// Width of one wing beside the notch: exactly one `contentSquare` plus
-    /// 6pt of padding on each side (== stripHeight + 2).
-    static let wingWidth: CGFloat = contentSquare + 12
+    static let contentSquare: CGFloat = max(stripHeight - contentInset * 2, 0)
+    /// Inset from the pill's *outer* edge to its wing square. The silhouette's
+    /// top corners sweep inward by `NotchShape.collapsedTopRadius` and its
+    /// bottom corners round by `collapsedBottomRadius`, so the straight side
+    /// only begins `collapsedTopRadius` inside the pill rect — content flush
+    /// with the rect edge pokes outside the black fill at both corners, which
+    /// is invisible over a dark window and obvious over a light desktop.
+    static let wingOuterInset: CGFloat = NotchShape.collapsedTopRadius + contentInset
+    /// Inset from the wing square to the physical notch edge.
+    static let wingInnerInset: CGFloat = contentInset
+    /// Width of the content slot in each wing. Wide enough for the artwork
+    /// square *and* the visualizer's bar row, so both wings stay identical and
+    /// neither one's content overflows its slot.
+    static let wingContentWidth: CGFloat = max(contentSquare, VisualizerView.naturalWidth)
+    /// Width of one wing beside the notch.
+    static let wingWidth: CGFloat = wingOuterInset + wingContentWidth + wingInnerInset
     /// Collapsed pill: the physical notch plus one wing on each side. This is
     /// the whole hover/hit surface while collapsed.
     static let pillWidth: CGFloat = notchWidth + wingWidth * 2
@@ -129,6 +143,32 @@ final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
+    /// Any click that lands on the drawn panel pins it open.
+    ///
+    /// This has to happen here rather than in a SwiftUI tap gesture: a `Button`
+    /// or a `Menu` consumes the tap before any gesture on the container sees
+    /// it, so clicking a control — a transport button, or the playlist picker —
+    /// never pinned. Opening the playlist menu then moved the pointer off the
+    /// panel, hover-out fired, and the panel collapsed out from under the menu
+    /// the user had just opened. `sendEvent` is the window's own entry point
+    /// for every event routed to it, so it sees the mouse-down before any view
+    /// gets the chance to swallow it.
+    ///
+    /// Gated on `contentView.hitTest`, which is the same live-geometry region
+    /// decision 012 uses for passthrough: a click on the transparent part of
+    /// the window is meant for the app behind and must not pin anything.
+    ///
+    /// The gear still collapses the panel — it pins here on mouse-down, then
+    /// its action runs on mouse-up and wins.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown,
+           state.displayedExpanded,
+           contentView?.hitTest(event.locationInWindow) != nil {
+            state.isExpanded = true
+        }
+        super.sendEvent(event)
+    }
+
     init(state: AppState, content: ContentView) {
         self.state = state
 
@@ -207,6 +247,20 @@ final class NotchPanel: NSPanel {
         // here.
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
             guard let self, self.state.isExpanded || self.state.isHovered else { return }
+            // A global monitor skips events delivered to the *active* app — and
+            // this panel is deliberately non-activating, so Tempo is never the
+            // active app and its own clicks arrive here too. Without this guard
+            // every click on the panel counted as a click outside it and
+            // collapsed the panel. (It went unnoticed because decision 011's
+            // pin was a tap gesture, which fires on mouse-*up*, after this
+            // mouse-*down* — so it silently re-pinned what this had just
+            // cleared.)
+            //
+            // Same hit region as the passthrough and the pin: if the point is
+            // on the drawn panel, it is not an outside click.
+            let point = self.convertPoint(fromScreen: NSEvent.mouseLocation)
+            guard self.contentView?.hitTest(point) == nil else { return }
+
             withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                 self.state.isExpanded = false
                 self.state.isHovered = false

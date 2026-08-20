@@ -20,10 +20,14 @@ struct VisualizerView: View {
 
     @ObservedObject private var tap = AudioTapService.shared
 
-    private let barCount = 5
-    private let barWidth: CGFloat = 3
-    private let barSpacing: CGFloat = 2.5
-    private let maxBarHeight: CGFloat = 16
+    private static let barCount = 5
+    private static let barWidth: CGFloat = 3
+    private static let barSpacing: CGFloat = 2.5
+    private static let maxBarHeight: CGFloat = 16
+    /// Width the bar row actually occupies. The strip sizes its wings around
+    /// this so the bars never overflow their slot and spill past the pill's
+    /// rounded edge.
+    static let naturalWidth: CGFloat = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barSpacing
     private let minFraction: CGFloat = 0.15
     private let transitionDuration: TimeInterval = 0.35
 
@@ -38,6 +42,10 @@ struct VisualizerView: View {
     /// visualizer frozen at full playing height on appear.
     @State private var transitionStart = Date.distantPast
     @State private var settled = true
+    /// Whether `.task(id:)` has already run once. Its first run is the view
+    /// *appearing*, not a play-state change, so it must not start a transition
+    /// — see the guard in the task below.
+    @State private var didAppear = false
 
     init(isPlaying: Bool) {
         self.isPlaying = isPlaying
@@ -47,12 +55,12 @@ struct VisualizerView: View {
         let reactive = tap.isCapturing
         TimelineView(.animation(minimumInterval: 1.0 / 30.0,
                                 paused: reactive || (!isPlaying && settled))) { context in
-            HStack(spacing: barSpacing) {
-                ForEach(0..<barCount, id: \.self) { index in
+            HStack(spacing: Self.barSpacing) {
+                ForEach(0..<Self.barCount, id: \.self) { index in
                     Capsule()
                         .fill(Color.white.opacity(0.92))
-                        .frame(width: barWidth,
-                               height: maxBarHeight * fraction(index: index,
+                        .frame(width: Self.barWidth,
+                               height: Self.maxBarHeight * fraction(index: index,
                                                                reactive: reactive,
                                                                date: context.date))
                 }
@@ -62,7 +70,22 @@ struct VisualizerView: View {
             .animation(reactive ? .linear(duration: 1.0 / 30.0) : nil, value: tap.bands)
         }
         .task(id: isPlaying) {
-            transitionStart = .now
+            // Only a real play-state *change* starts a transition. `.task(id:)`
+            // also fires once when the view appears, and stamping
+            // `transitionStart = .now` there re-created exactly the hazard the
+            // `distantPast` initial value exists to avoid: on a paused launch
+            // `playEnergy` reads progress ≈ 0, so `1 - eased` ≈ 1 — full
+            // playing height — and because the timeline is paused whenever
+            // `!isPlaying && settled` (both true on a paused launch), that
+            // frame is the one that stays on screen. Measured: bar fractions
+            // [0.57, 0.80, 0.33, 0.65, 0.69] instead of a flat [0.15 × 5], and
+            // frozen there, so a launch with nothing playing looked exactly
+            // like music playing.
+            if didAppear {
+                transitionStart = .now
+            } else {
+                didAppear = true
+            }
             guard !isPlaying else {
                 settled = false
                 return

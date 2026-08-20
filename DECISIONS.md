@@ -23,12 +23,26 @@
 | 010 | 2026-08-19 | Liquid Glass: expanded panel uses macOS 26 `glassEffect` (`.ultraThinMaterial` fallback) with a black-to-glass top gradient; collapsed strip stays pure black | Accepted |
 | 011 | 2026-08-19 | Interaction model: hover fully expands (transient) with a haptic tick; click pins; click outside unpins — revises 009 | Amended by 014 |
 | 012 | 2026-08-20 | Click-fallthrough fix: hit region tracks the live animating shape geometry, not the expanded/collapsed flag — amends 008 | Accepted |
-| 013 | 2026-08-20 | Geometry: Dynamic-Island collapsed pill (notch + content-fit wings, concave-top NotchShape); expanded panel is content-sized — amends 006 | Accepted |
+| 013 | 2026-08-20 | Geometry: Dynamic-Island collapsed pill (notch + content-fit wings, concave-top NotchShape); expanded panel is content-sized — amends 006 | Amended by 019 |
 | 014 | 2026-08-20 | Motion & control polish: boringNotch spring constants, 0.25s hover dwell, Reduce Motion fades, HIG 28pt targets + press states, semantic colors — amends 011 | Accepted |
 | 015 | 2026-08-20 | Spotify signal delivery: event-driven via `PlaybackStateChanged` distributed notification; 1s AppleScript poll removed — amends 002 | Accepted |
 | 016 | 2026-08-20 | Real audio-reactive visualizer: Core Audio per-process tap on Spotify + 5-band vDSP FFT; 004's animation kept as silent fallback — supersedes 004 | Accepted |
 | 017 | 2026-08-20 | System usage graph: CPU + memory sparklines (Notchy/iStat style) in the expanded panel; Path-based, never Canvas | Accepted |
 | 018 | 2026-08-20 | Packaging: `scripts/make-app.sh` assembles a signed `dist/Tempo.app`; required for the audio-capture permission | Accepted |
+| 019 | 2026-08-20 | Pill content insets clear the silhouette's corner curves; album art travels from the pill into the expanded header, left of the transport controls — amends 013 | Accepted |
+| 020 | 2026-08-20 | Settings: a separate ordinary NSWindow (System-Settings sidebar+form), opened by a gear in the expanded panel; preferences in UserDefaults, Client ID written to config.json from the Music pane | Accepted |
+| 021 | 2026-08-20 | Visualizer reads the tap's buffer in the aggregate input list, not buffer 0 — buffer 0 is the output device's microphone whenever it has one — fixes 016 | Accepted |
+| 022 | 2026-08-20 | Fullscreen: drop the panel below the top edge to dodge macOS's chrome reveal | **Reverted** same day — pill sits at the notch |
+| 023 | 2026-08-20 | Settings Music pane is a guided 3-step setup (dashboard link, redirect-URI copy, Client ID); the developer app itself cannot be removed — Spotify's AppleScript dictionary has no playlist support | Accepted |
+| 025 | 2026-08-20 | A minimal `NSApp.mainMenu` (app + Edit) so the Settings text field accepts ⌘V/⌘C/⌘X/⌘A — an accessory app has no main menu, and AppKit routes editing key equivalents through it | Accepted |
+| 026 | 2026-08-20 | Playlist picker lists only playlists the user can add to (owned or collaborative), and add-failures report Spotify's actual reason — amends 003 | Accepted |
+| 027 | 2026-08-20 | Playlist search lives in Settings (searchable list + chosen favorites), not in the notch panel — the panel stays non-key | Accepted |
+| 028 | 2026-08-20 | Expanded header: 72pt cover, title centred over the play button, transport spread full width, gear as a corner overlay — amends 019 | Accepted |
+| 029 | 2026-08-20 | Pin-on-click moves to `NotchPanel.sendEvent` so clicks on controls also pin the panel; only an outside click closes it — amends 011 | Accepted |
+| 030 | 2026-08-20 | The outside-click monitor must ignore clicks that land on the panel: a non-activating app's own clicks reach its global monitor — completes 029 | Accepted |
+| 031 | 2026-08-20 | Paint a 5% substrate under the expanded panel's glass: macOS routes clicks on a non-opaque window by backing-store alpha, and Liquid Glass paints none — amends 010 | Accepted |
+| 029 | 2026-08-20 | Expanded panel gets a visible glass rim: gradient 1.2pt stroke + blurred 3pt under-stroke, overlaid outside the clip, masked off across the black notch-merge band — amends 010 | Accepted |
+| 030 | 2026-08-20 | Panel material is a preference: regular / clear / album-tinted glass / solid, from the only three real `Glass` variants plus an opt-out — amends 010 | Accepted |
 
 ---
 
@@ -512,6 +526,21 @@ rejected (built on Canvas, heavy for a fixed sparkline).
 
 ## 018 — Packaging: signed `dist/Tempo.app` via `scripts/make-app.sh`
 
+> **Amended 2026-08-20:** the script now SIGTERMs any process still running the
+> bundle it just replaced, waits for it to exit, and **relaunches it**. `open dist/Tempo.app`
+> on an already-running app *activates the existing process* rather than
+> launching the new binary, so three consecutive rebuilds were tested against a
+> build from before all of them — which read as "the new feature isn't there".
+> The pattern matches the bundle-relative suffix (`Tempo.app/Contents/MacOS/
+> tempo`), not the absolute path: this repo resolves under both
+> `…/Documents/code/Tempo` and `…/documents/code/tempo`, and while the
+> filesystem is case-insensitive, `pgrep -f` is not — an absolute-path pattern
+> silently matched nothing. SIGTERM only; a stuck process is the user's to deal
+> with, not something a build script should SIGKILL. Quitting *without*
+> relaunching was the first version and was wrong in its own way — a rebuild
+> silently took the notch off screen, which cost another round trip. An app
+> that was not running before the rebuild stays not running.
+
 **Date:** 2026-08-20 · **Status:** Accepted
 
 **Context.** Queued since 008 for login-item/TCC identity; became mandatory when
@@ -528,3 +557,840 @@ survived one ad-hoc re-sign during verification, but it is not guaranteed);
 a self-signed "Tempo" certificate — the pattern AgentStatus already uses on this
 machine — is queued in NEXT_STEPS as the durable fix. Bundled launch is now the
 *primary* run path (the bare binary cannot capture audio, 016).
+
+---
+
+## 019 — Pill content insets + album art moves into the expanded header (amends 013)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** Two defects the user reported against 013's layout.
+
+1. *Content overflowed the black pill.* 013 sized each wing as
+   `contentSquare + 12` and centred the square in it, so the square's outer edge
+   landed exactly on the pill's **rect** edge. But `NotchShape`'s straight side
+   starts `collapsedTopRadius` (6pt) *inside* that rect, and the bottom corner
+   rounds away over `collapsedBottomRadius` (14pt). Measured on this machine:
+   at the artwork's bottom edge (5pt above the pill's bottom) the shape's
+   boundary sits **8.3pt** in from the rect edge while the artwork started at
+   **6pt** — a 2.3pt overhang at both bottom corners, and the top corners were
+   flush to within 0.05pt. Invisible over a dark full-screen window, obvious
+   over a light desktop, which is exactly how it was reported. The visualizer
+   compounded it: its bar row is 25pt wide but 013 gave it a
+   `contentSquare`-wide (23pt) frame, so it overflowed its own slot too.
+2. *Expanded controls sat alone against the panel's left edge*, with the album
+   cover stranded up in the pill.
+
+**Choice.**
+- **Explicit, curve-derived insets.** `wingOuterInset =
+  NotchShape.collapsedTopRadius + contentInset` (12pt) and `wingInnerInset =
+  contentInset` (6pt), with `contentInset` (6pt) also setting the vertical
+  inset — so `contentSquare = stripHeight − 12`. The wing's content slot is
+  `max(contentSquare, VisualizerView.naturalWidth)`, keeping both wings
+  identical and neither one's content past its slot. On this machine: square
+  23→21pt, wing 35→43pt, pill 255→**271pt**; worst-case clearance between
+  content and the shape boundary is now 4.3pt (was −2.3pt).
+- **Album art travels into the panel.** The expanded view opens with a
+  `nowPlayingHeader`: 56pt cover on the left, track/artist and the transport row
+  stacked to its right. The cover is the *same* view as the pill's, paired by
+  `matchedGeometryEffect`, so it flies down-left and grows rather than
+  cross-fading; the pill's slot keeps its width, so the visualizer and the notch
+  gap never shift. The pill is unchanged while collapsed.
+
+**Rejected.** Clipping the strip content to `NotchShape` — it would hide the
+overhang instead of fixing the spacing, and would shave the artwork's corners.
+Also rejected: shrinking only the vertical inset to keep a 23pt square; the
+report was that the border felt *tight*, so the extra breathing room is the
+point.
+
+---
+
+## 020 — Settings: a separate activating NSWindow, opened by a gear in the panel
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Context
+
+Tempo had no settings surface at all: the Spotify Client ID could only be
+configured by hand-writing `~/Library/Application Support/Tempo/config.json`
+(the one manual step the README documented — exactly what Agent Guideline #8
+exists to eliminate), and the display modules could not be turned off. The
+user asked for the pop-out settings NotchNook and boringNotch have, matching
+macOS System Settings, opened from a gear in the expanded view's top-right.
+
+### The constraint that decides the shape
+
+The notch panel is a non-activating `NSPanel` whose `canBecomeKey` is
+hard-`false` (decision 006, Agent Guideline #3). A window that can never
+become key can never receive a keystroke — so the Client ID field cannot live
+in the panel. Settings has to be a second, ordinary window.
+
+### Options considered
+
+| Option | Pros | Cons |
+|---|---|---|
+| Settings inside the notch panel | No new window; stays in the notch metaphor | **Can't type into it** — the panel is non-activating by design. Would also make the panel a menu, against UI Principle #3 |
+| SwiftUI `Settings` scene | Free ⌘, handling and window plumbing | Requires an `App`-lifecycle app; Tempo is `main.swift` + `NSApplicationDelegate` (decision 001). Would mean restructuring the app entry point for one window |
+| **Separate `NSWindow` built by an owner object** (chosen) | Ordinary focusable system-appearance window; no change to the panel or the app entry point; window is built once and reused so pane selection and an in-progress edit survive close/reopen | We do the activation ourselves |
+
+### Decisions
+
+1. **`SettingsWindowController` owns one lazily-built `NSWindow`**
+   (`.titled/.closable/.miniaturizable/.resizable/.fullSizeContentView`,
+   transparent titlebar so the sidebar material runs up under it).
+2. **Activation policy stays `.accessory`** — no Dock icon appears. Opening
+   calls `NSApp.activate(ignoringOtherApps: true)` then
+   `makeKeyAndOrderFront`. `ignoringOtherApps` is load-bearing, not legacy
+   habit: measured on macOS 26.6 that plain `NSApp.activate()` leaves the
+   window `isVisible == true` but `isKeyWindow == false`, because the panel
+   that was clicked is non-activating and the system therefore does not treat
+   Tempo as the app the user is interacting with. A non-key window cannot take
+   the Client ID field's keystrokes. This is the one moment Tempo takes focus,
+   and only because the user explicitly clicked the gear.
+3. **Layout: `NavigationSplitView` sidebar + `.formStyle(.grouped)` detail**,
+   panes General / Music / Modules / About — the System Settings shape the user
+   asked for, and the one that scales as panes are added.
+4. **The gear collapses the panel on the way out.** Necessary, not cosmetic:
+   `NotchPanel`'s outside-click monitor is a *global* monitor, and a click in
+   Tempo's own Settings window is not global, so a pinned panel would otherwise
+   stay open behind/above Settings forever.
+5. **Preferences live in `UserDefaults`** (`Preferences.shared`), defaulting to
+   on so a fresh install behaves exactly as before. The Client ID is *not*
+   among them — it stays in Application Support beside the tokens, the one
+   place with owner-only permissions (Agent Guideline #5). The Music pane
+   writes `config.json` at 0600 via `SpotifyWebAPI.saveClientID`, and changing
+   the id to a different app drops the tokens issued to the old one.
+6. **Launch at login via `SMAppService.mainApp`**, with the system as the source
+   of truth (re-read every time the window opens, since the user can also
+   remove the login item in System Settings). From the bare `swift build`
+   binary there is no bundle to register: the toggle is disabled and says so
+   rather than failing silently.
+7. **Hiding the visualizer keeps its wing slot.** The collapsed pill's width is
+   a `static let` that `NotchPanel`'s hit-region clamp floors against; making
+   it depend on a preference would make the panel over-claim clicks in
+   transparent area when the visualizer is off (Agent Guideline #3). The slot
+   stays, its content is simply not drawn. Revisit if the empty wing reads as
+   broken.
+8. **Switching the usage module off stops `SystemStatsService`** (new `stop()`),
+   driven by a Combine sink on the preference in `AppDelegate` — a hidden
+   module should cost nothing, not just be invisible.
+
+### Consequences
+
+- The README's manual `config.json` step becomes optional; hand-editing still
+  works.
+- Tempo now briefly takes focus when Settings opens. The notch panel itself is
+  unchanged: still non-activating, still never key.
+
+---
+
+## 021 — Visualizer must read the tap's buffer, not buffer 0 (fixes 016)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Symptom
+
+Reported: the visualizer sometimes looks like audio is playing when music is
+stopped — noticed while in a meeting.
+
+### Root cause
+
+Decision 016's tap is correctly scoped to Spotify
+(`CATapDescription(stereoMixdownOfProcesses:)`), but the IO proc runs on the
+**aggregate device**, whose input buffer list is *the sub-device's input
+streams first, the tap's streams after them*. `TapProcessor.process` read
+`abl[0]` unconditionally.
+
+Verified on macOS 26.6 by building the exact aggregate this codebase builds and
+reading `kAudioDevicePropertyStreamConfiguration` (input scope) — no IO proc, so
+no microphone was opened:
+
+| Aggregate's sub-device | Input buffer layout | What `abl[0]` is |
+|---|---|---|
+| Output-only device (built-in speakers, AirPods in A2DP) | `[2]` | the tap ✅ |
+| Device that also carries an input stream | `[1, 2]` | that device's **microphone** ❌ |
+
+So buffer 0 was the tap only by luck of the user's current output device.
+Whenever the default output device also has an input stream — a headset in call
+mode, or the input+output virtual device meeting apps install — Tempo was
+running its FFT over **microphone audio**: bars that dance to the room with
+Spotify stopped, and a direct contradiction of the README's privacy claim that
+the tap is scoped to Spotify.
+
+Notably this machine's AirPods currently enumerate as *two* devices
+(`…:input` / `…:output`), so the plain-desktop case never showed the bug — which
+is why it survived 016's live verification.
+
+### Fix
+
+`AudioTapService.tapBufferIndex(aggregate:subDevice:)` computes the tap's
+position as the sub-device's input-buffer count, checked against the
+aggregate's own input layout, and hands it to the processor before the IO proc
+starts. `process()` reads `abl[tapBuffer]` with an `abl.count > tapBuffer`
+guard, and the non-interleaved second-channel lookup moves to
+`abl[tapBuffer + 1]`.
+
+Verified against real aggregates of Tempo's exact shape: output-only sub-device
+→ index 0 (a no-op, so the behaviour 016 verified live is unchanged);
+sub-device with an input stream → index 1, and the buffer at that index is the
+2-channel stereo mixdown the tap produces.
+
+### Considered and rejected
+
+- **Gate `isCapturing` on `isRunningOutput(spotifyProcessObject)` at 30 Hz** —
+  treats the symptom, adds a HAL property read per frame, and would still have
+  left mic audio going through the FFT.
+- **Build a tap-only aggregate (no sub-device)** — would make index 0 correct by
+  construction, but changes the device topology that 016 verified live capturing
+  real music, for no benefit over reading the right index.
+
+---
+
+## 022 — Fullscreen drop instead of suppressing the chrome reveal
+
+**Date:** 2026-08-20 · **Status:** Reverted the same day — see the reversal below
+
+### Context
+
+In a fullscreen app, pulling the pointer straight up to the notch slides down
+the menu bar and the fullscreen window's title bar (its close/expand buttons).
+Requested: don't reveal it when going to the notch, but keep revealing it
+everywhere else along the top edge.
+
+### What was ruled out first
+
+- **Public API.** There is none. The reveal is the WindowServer's, keyed on
+  cursor position; `NSApplication.presentationOptions` and
+  `NSMenu.setMenuBarVisible` only affect the calling app, and Tempo is never
+  the active app. The close/expand buttons are the *other* app's AppKit
+  title bar, in that app's process.
+- **The category hasn't solved it.** boringNotch carries the same complaint as
+  open bugs (#1359, #764) — theirs additionally gets stuck revealed.
+- **Private SkyLight symbols.** Probed on this machine (macOS 26.6):
+  `SLSSetMenuBarVisibilityOverrideOnDisplay`, `SLSSetMenuBarInsetAndAlpha` and
+  `SLSSetMenuBarDrawingStyle` all resolve. Rejected: they are *system-wide*,
+  not region-scoped, so Tempo would have to run a continuous global cursor
+  monitor and toggle a global override as the pointer crosses the notch —
+  reaching into a system surface every other app depends on (Agent Guideline
+  #3) — on unversioned private API, and they address the menu bar, not the
+  title bar the user actually named.
+
+### Decision
+
+Tempo can't veto the reveal, but it can change **where it invites the pointer
+to stop**. While a fullscreen window owns the notched display, the panel drops
+`fullscreenDrop` (10pt) below the top edge: a pointer pulled straight up lands
+on the pill without entering the trigger band, and the bare top edge either
+side of the pill still reveals the chrome exactly as before.
+
+Implementation notes:
+
+- **The window moves, not the content.** `activeRect` is in window
+  coordinates, so it travels with the frame and decision 012's live-geometry
+  passthrough keeps working untouched.
+- **Detection is event-driven, not polled** (`activeSpaceDidChange` +
+  `didActivateApplication` — entering, leaving, or switching into a fullscreen
+  app always changes the Space), evaluated immediately and again at +0.8s
+  because the new window geometry isn't in place when the Space notification
+  fires. A resting panel still costs nothing.
+- **`CGWindowListCopyWindowInfo`** with `.optionOnScreenOnly` (current Space
+  only), reading layer and bounds but never `kCGWindowName`, so it needs no
+  Screen Recording grant and raises no prompt — verified with a bare unsigned
+  binary. Measured baseline: ordinary maximized windows sit at y=34 under the
+  34pt menu-bar inset and never match; a fullscreen window starts at y=0 and
+  spans the full display height.
+
+### Reversal (same day)
+
+Removed at the user's request; the panel sits at the notch again and the whole
+detection path (`observeFullscreen`, `CGWindowListCopyWindowInfo`, the drop) is
+gone rather than left dormant behind a zero constant.
+
+Worth recording precisely, because the reversal rests on a **failed test, not a
+measurement**: the drop was reported as ineffective, but the Tempo process on
+screen had started at 11:26:19, before any of that day's three builds — `open
+dist/Tempo.app` activates an already-running instance instead of launching the
+replaced binary, so the running app contained no drop at all. By the time this
+came to light the user had chosen to keep the pill at the notch, which settles
+it; but the 10pt drop remains **untested**, not disproved. If this is revisited,
+start by actually observing it, then escalate toward the menu-bar height (34pt)
+— which puts the pill fully below the notch and is a real change in look.
+
+The stale-instance trap itself is now fixed in `scripts/make-app.sh` (see 018).
+
+---
+
+## 023 — The Spotify developer app can't be removed, only made one click per step
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### The question
+
+Can the one-time Spotify Developer app setup be dropped?
+
+### Answer: no, and the reason is checkable
+
+Verified against the installed Spotify **1.2.95.453** by reading its scripting
+definition directly (`/Applications/Spotify.app/Contents/Resources/Spotify.sdef`,
+Agent Guideline #4): the dictionary declares two classes (`application`,
+`track`), five commands (`play`, `pause`, `playpause`, `next track`,
+`previous track`, `play track`) and track properties. The string "playlist"
+does not appear in the file at all.
+
+So add-to-playlist has to go through the Web API, and Spotify requires every
+Web API app to be registered under a developer account. Shipping a Client ID
+inside Tempo doesn't help either: apps in Development Mode serve only up to 25
+users, each added by hand in the dashboard, and Extended Quota Mode needs an
+app review — so an embedded id would still mean per-user dashboard work, plus
+it would tie every user to one person's developer app.
+
+### What was done instead
+
+The Music pane is now a guided three-step flow rather than a bare field:
+
+1. **Open Dashboard** button (`NSWorkspace.open`) — no URL to retype.
+2. The Redirect URI shown in monospace, selectable, with a **Copy** button that
+   confirms for two seconds. It has to be character-exact, which is the step
+   most likely to be got wrong by hand.
+3. The Client ID field and **Save**.
+
+The footer states plainly why the step can't be skipped, and that the Client ID
+is not a secret (PKCE publishes it) but is still stored owner-only alongside the
+tokens.
+
+### Also fixed here
+
+`SettingsWindowController`'s window gets
+`collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]`. A plain
+window stays in the Space it was first opened on, so clicking the gear from
+another desktop either switched Spaces or appeared to do nothing instead of
+showing Settings where the user was.
+
+---
+
+## 024 — Visualizer must not start a transition on appear (fixes 004/016)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Symptom
+
+Launching Tempo with nothing playing showed bars at playing height, frozen
+there — a launch with no audio looked exactly like music playing.
+
+### Root cause
+
+`VisualizerView.transitionStart` is deliberately initialised to `.distantPast`
+so the first render reads as a *completed* transition; the existing comment even
+warns that starting it at `.now` "would leave a paused visualizer frozen at full
+playing height on appear". But the `.task(id: isPlaying)` that drives the
+play/pause fade stamped `transitionStart = .now` unconditionally — and
+`.task(id:)` fires once when the view *appears*, not only when the id changes.
+So every launch re-created the documented hazard.
+
+With `transitionStart == .now`, `playEnergy` reads progress ≈ 0 and returns
+`1 - eased` ≈ **1.0** — full playing height — and the `TimelineView` is paused
+whenever `!isPlaying && settled`, both of which are true on a paused launch, so
+that frame is the one that stays. Reproduced numerically against the view's own
+maths: bar fractions `[0.57, 0.80, 0.33, 0.65, 0.69]` instead of a flat
+`[0.15 × 5]`.
+
+### Fix
+
+A `didAppear` flag: the first run of the task claims the current play state
+without starting a transition, and only genuine `isPlaying` changes stamp
+`transitionStart`. Verified: energy 0.00 and a flat `[0.15 × 5]` on a paused
+launch, unchanged behaviour on a play/pause flip.
+
+### Note on 021
+
+This is a *separate* cause from decision 021's microphone-buffer bug, and it is
+the one that matches "looks like it's playing at launch". 021 remains a real
+defect — it was verified structurally — but the two should not be conflated.
+
+---
+
+## 025 — A main menu, purely to make ⌘V work in Settings
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Symptom
+
+The Client ID could not be pasted into the Settings field. Typing worked;
+⌘V did nothing.
+
+### Root cause
+
+AppKit resolves editing key equivalents through
+`NSApp.mainMenu.performKeyEquivalent(with:)` *before* the keystroke reaches the
+responder chain — ⌘V is delivered by the Edit menu's Paste item, not by the text
+field itself. An accessory app (`LSUIElement`) launched from `main.swift` with
+no nib has **no main menu at all**, so there was nothing to carry the shortcut.
+
+Verified both directions against the real app, with a temporary hook that put a
+known string on the pasteboard, made the Client ID field first responder, and
+sent a synthesized ⌘V through the main menu:
+
+| | `performKeyEquivalent` | field contents |
+|---|---|---|
+| No main menu (the reported state) | `false` | `""` |
+| With the Edit menu | `true` | `"PASTED_CLIENT_ID_42"` |
+
+### Decision
+
+Install a minimal `NSMenu` at launch: an app menu (AppKit always treats the
+first item as such) carrying Quit, and an Edit menu with Undo/Redo/Cut/Copy/
+Paste/Select All. `LSUIElement` still means no menu bar is ever *displayed* —
+the titles are never seen, and the menu exists only to carry key equivalents.
+This also gives Tempo a ⌘Q for the first time, which it had no way to offer
+before.
+
+Right-click → Paste in the field worked all along (the field editor supplies
+its own contextual menu), which is why this looked like a field problem rather
+than a menu problem.
+
+---
+
+## 026 — Only offer playlists that can actually be added to (amends 003)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Symptom
+
+Adding the current song showed a warning triangle and nothing else.
+
+### Root cause
+
+`GET /me/playlists` returns **followed** playlists alongside owned ones, and
+decision 003's picker listed all of them and defaulted to the first row. Spotify
+answers **403 Forbidden** to a POST against someone else's non-collaborative
+playlist, and `add()` discarded the status entirely — `return http.statusCode ==
+200 || http.statusCode == 201` — so every distinct failure collapsed into one
+mute glyph.
+
+Diagnosed against the live account with read-only calls (no POST, so nothing was
+added, and the token was passed to `curl` through a 0600 config file rather than
+argv, and never printed): `/me` and `/me/playlists` both returned 200 — auth was
+never the problem — and of **48 playlists, the first was owned by another
+user**. The default selection could not have worked.
+
+### Decisions
+
+1. **Filter to writable playlists**: keep an item only when
+   `owner.id == currentUserID || collaborative == true`. Offering a playlist
+   that can never accept a track is a lying signal (UI Principle #4), and it
+   poisoned the *default* selection specifically. Verified against the real
+   response: 48 → 17 offered, default becomes the user's own first playlist.
+   `currentUserID` comes from one cached `GET /me`, cleared on disconnect.
+2. **Report the actual reason.** `lastAddError` carries a sentence the user can
+   act on — 403 → "it isn't yours and isn't collaborative", 401 → reconnect,
+   404 → playlist gone, 429 → rate-limited, otherwise Spotify's own
+   `error.message` plus the status. Shown under the row and as the triangle's
+   tooltip, and the failure state now lingers 6s rather than 2s so it can be
+   read. Agent Guideline #11: state what failed, not that something failed.
+3. **Reject local files early**: AppleScript reports them as `spotify:local:…`,
+   which the Web API cannot add at all, so that gets its own message instead of
+   a confusing 400.
+4. **Re-point a stale selection** when the filtered list changes, so a removed
+   playlist can't sit there failing on every press.
+
+### Note
+
+Nothing here was an auth problem, which is why "reconnect Spotify" would have
+been the wrong instinct — the session was valid the whole time with ~55 minutes
+of headroom left.
+
+---
+
+## 027 — Playlist search belongs in Settings, not the notch panel
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### The constraint
+
+Searching means typing, and the notch panel's `canBecomeKey` is hard-`false`
+(decision 006) — it can never receive a keystroke.
+
+### Was that relaxable?
+
+Tested rather than assumed. A `.nonactivatingPanel` with `canBecomeKey`
+flipped to true, made key while Finder was frontmost:
+
+```
+frontmost before makeKey = Finder
+panel.isKeyWindow        = true
+field can take typing    = true
+frontmost after makeKey  = Finder
+=> stole the foreground? = false
+```
+
+So an in-panel search field *was* technically viable — the panel can take
+keystrokes without stealing the foreground app, exactly as Spotlight does. It
+would still mean that while the field is open the user's typing goes to Tempo
+rather than the app they're looking at, and it would turn decision 006's
+invariant into a conditional. Presented with that trade, the user chose to keep
+the panel non-key.
+
+### Decision
+
+Search lives in **Settings ▸ Music**, which is an ordinary focusable window:
+
+- a search field filtering the writable playlists by **substring**, not prefix
+  (so "worship" finds "Sunday Worship Set" — the thing menu type-select can't
+  do), plus a Refresh button;
+- tick the playlists to offer in the notch; the notch picker then shows only
+  those, in the order they were picked, starting on the first;
+- **ticking nothing means everything is offered**, so add-to-playlist still
+  works for someone who never opens Settings.
+
+Stored as `Preferences.favoritePlaylistIDs` in UserDefaults — display
+preference, not credential.
+
+### Note
+
+`offered` builds its lookup with `Dictionary(_:uniquingKeysWith:)` rather than
+`uniqueKeysWithValues:`, which traps on a duplicate key: Spotify's paginated
+`/me/playlists` can repeat an entry if the underlying list shifts between page
+fetches, and a trap there would crash the notch panel.
+
+---
+
+## 028 — Expanded header: centred title over the transport row (amends 019)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+Requested layout change. The cover grows 56 → **72pt**, chosen so cover +
+controls fill the content width and the cover's height matches the column
+beside it (title + artist + a 28pt control row ≈ 72pt).
+
+Title and artist are centred above the transport row, which spreads across the
+full remaining width with equal spacers — so the middle button (play/pause)
+lands on the column's centre line, directly under the title.
+
+**Addendum 4 (same day) — the picker's hover decoration has to live on the
+`Menu`, not in its `label:`.** With `.background`/`.overlay` written inside the
+label closure the hover state produced no visible change. Moving them onto the
+`Menu` itself fixes it; verified by having the app render its own view to a
+bitmap and sample the picker's rect, which then tracked the hover state exactly
+(0.9326 → 0.9680 using deliberately opaque test colours).
+
+Method note: that measurement was wrong three times before it was right — the
+sample region was mis-placed, then `bitmapImageRepForCachingDisplay` was found
+to return a **pixel**-sized rep so point coordinates sampled at half scale on a
+Retina display (landing on the album art, which is why an opaque red background
+read the same as an 8% white one), then a whole-area average was used where only
+a 1.5pt border changes. Each correction reversed the conclusion. A probe that
+cannot distinguish red from white is not measuring what it claims to.
+
+**Addendum 3 (same day) — picker hover matches the transport buttons.** The
+picker's highlight now uses `NotchButtonStyle`'s own values (`hoverFill`,
+`hoverStroke`, `hoverAnimation`, promoted to shared statics) plus an outline on
+hover, so the two controls speak the same language. A `ButtonStyle` cannot reach
+a `Menu`, so the picker has to mirror the constants rather than adopt the style;
+sharing them keeps the two from drifting. It keeps a faint resting plate (0.08)
+that the buttons don't have, because unlike them it has no glyph to mark it —
+that was the fix in addendum 1.
+
+**Addendum 2 (same day) — playlist row moved into the header column, cover
+auto-sized.** The add-to-playlist row now sits inside the right-hand column,
+under the transport controls, rather than as its own row across the panel. That
+makes the column taller, so the cover is no longer a fixed 72pt: it tracks the
+column's *measured* height (`headerColumnHeight`, the same GeometryReader
+pattern the panel already uses for its own height), clamped to 72–116pt. The
+column's height depends on font metrics and on which rows are showing, which is
+not something to hard-code — measured live at 106pt, so the cover is 106.
+The clamp's upper bound exists because the add-failure message is a transient
+extra line inside that column and shouldn't balloon the cover; the resize rides
+the same spring as the rest of the panel. Picker padding also went to 13×10pt
+with a 34pt minimum height.
+
+**Addendum (same day) — the playlist picker was nearly unclickable.** Its
+`Menu` used a bare `Text` label, so its hit region was the width of the rendered
+characters and no taller, with no background or indicator to show it was a
+control at all. It now draws a full-width plate: 10×7pt padding, a 30pt minimum
+height (HIG target, decision 014), a rounded fill that brightens on hover, an
+explicit up/down chevron, and `.contentShape` so the whole plate takes the
+click rather than the glyphs. This also closes the open question logged in
+`NEXT_STEPS.md` about the `Menu` having no hover affordance — a `ButtonStyle`
+can't reach a `Menu`, but the label can carry the affordance itself.
+
+The gear moved out of the header row into an `.overlay(alignment: .topTrailing)`
+on the panel content. As a member of the row it consumed width on one side
+only, which pulled the "centred" title off the play button; as an overlay it
+costs no layout width. The title keeps *symmetric* horizontal padding so it
+stays centred while still clearing the gear.
+
+---
+
+## 029 — A visible rim on the expanded panel (amends 010)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** Decision 010's Liquid Glass panel had no edge at all. Against a
+bright or busy window behind it the `glassEffect` body has low contrast with its
+surroundings, so the panel's outline was hard to read and it stopped looking
+like a discrete surface. Request was a more noticeable border that still reads
+as glass, not as a drawn box.
+
+**Implementation.** `borderLayer` in `ContentView.swift`, two strokes of
+`NotchShape`:
+
+- a 1.2pt stroke filled with a vertical white gradient (0.55 → 0.16 → 0.38), so
+  the shoulders and base catch light while the waist stays dim — how a real
+  glass edge lights, rather than a uniform hairline;
+- under it a 3pt stroke at 0.14 white, blurred 2.5pt, which reads as the
+  thickness of the material and keeps the rim visible over light backdrops
+  without raising the crisp stroke's opacity.
+
+**Two constraints that shaped it:**
+
+1. **Overlay after `clipShape`, not inside it.** A stroke drawn inside the
+   clipped glass group is centred on the path, so the clip eats its outer half
+   and halves the effective width. `.overlay(borderLayer)` sits outside the
+   clip and draws at full width.
+2. **Masked off across the top band.** The panel's first `stripHeight` points
+   are deliberately blended to black so the panel merges with the notch pill
+   (010, UI Principle #6). An outline through that band would draw a lit edge
+   across the seam and make the panel read as a box hanging off the notch. The
+   mask is a point-exact `VStack` — clear for `stripHeight`, a 24pt ramp, then
+   opaque — matching the black gradient's own extent rather than a percentage.
+
+The layer is `allowsHitTesting(false)`; it exists only while
+`displayedExpanded`, so the collapsed pill is untouched (still pure black, no
+rim).
+
+---
+
+## 030 — The panel's material is a preference (amends 010)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** Requested after seeing the same control in Notchy/boringNotch:
+let the user pick the Liquid Glass style rather than hardcoding one.
+
+**What the API actually offers (verified, Agent Guideline #4).** Read from the
+installed SDK's interface
+(`MacOSX.sdk/…/SwiftUICore.swiftmodule/arm64e-apple-macos.swiftinterface`, SDK
+26.5 on macOS 26.6.1): `Glass` exposes exactly three variants — `.regular`,
+`.clear`, `.identity` — plus `.tint(Color?)` and `.interactive(Bool)`. So
+"pick a glass style" is a two-item menu unless the picker also covers
+non-Apple materials. `.identity` is not offered: for a panel it means no
+material at all, which reads as a rendering bug rather than a style.
+
+**The four styles** (`PanelStyle` in `Preferences.swift`):
+
+| Style | Draws | Note |
+|---|---|---|
+| Regular (default) | `glassEffect(.regular)` | unchanged from 010 |
+| Clear | `glassEffect(.clear)` | + a 0.22 black scrim |
+| Album tint | `glassEffect(.regular.tint(cover colour))` | falls back to plain regular with no artwork |
+| Solid | `Color.black.opacity(0.93)` | opts out of glass; one slab with the notch |
+
+**Clear glass needs the scrim.** `.clear` passes the backdrop through almost
+intact, so white track titles over a bright window behind the notch are
+unreadable — this matches Apple's own guidance that clear glass belongs over
+media with a dimming layer. The scrim is applied only for that style; the
+others already carry enough density.
+
+**Album tint: weighted, not averaged.** A plain average of a cover comes out
+grey-brown on most albums, because dark background and letterboxing outnumber
+the coloured subject. `NSImage.dominantColor()` (AppState.swift) draws a 16×16
+downscale, weights each pixel by its own saturation (with a 0.15 floor so an
+entirely grey cover still yields grey), then floors the result to 0.5
+saturation / 0.6 brightness — below that a glass tint is invisible. It is
+recomputed in `AppState.artwork`'s `didSet`, i.e. once per cover change, not
+per frame. The tint is applied at 0.55 alpha; `.tint(nil)` is defined as "no
+tint", so the no-artwork case needs no separate branch.
+
+**Below macOS 26** there is no `glassEffect`, so the three glass styles degrade
+to the nearest `Material` (`.ultraThinMaterial` for clear, `.regularMaterial`
+otherwise). The picker still works and still visibly changes the panel; it just
+isn't Liquid Glass. `.solid` is identical on every version.
+
+**Persistence** is the raw string in `UserDefaults`, decoded with a
+`?? .regular` fallback, so an unrecognised value from another build degrades
+instead of failing.
+
+**Unchanged:** the collapsed pill. Every style leaves it pure black — it has to
+merge with the physical notch (UI Principle #6), which is not a stylistic
+choice. The rim from 029 is drawn for all four styles.
+
+---
+
+## 029 — Clicking anything in the panel pins it (amends 011)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Symptom
+
+Clicking inside the expanded panel could still collapse it. Only an outside
+click was supposed to.
+
+### Root cause
+
+Decision 011's pin was a SwiftUI `.onTapGesture` on the content container. A
+`Button` or a `Menu` consumes the tap before any gesture on the container sees
+it, so clicking a *control* never set `isExpanded`. The panel therefore stayed
+merely hover-expanded, and the next hover-out collapsed it. The playlist picker
+made this sharp: opening its menu moves the pointer onto the menu's own window,
+hover-out fires, and the panel collapsed out from under the menu the user had
+just opened.
+
+### Decision
+
+Pin in `NotchPanel.sendEvent(_:)` — the window's own entry point for every
+event routed to it, reached before any view can swallow the mouse-down.
+
+Gated on `contentView?.hitTest(event.locationInWindow) != nil`, which is the
+same live-geometry region decision 012 uses for passthrough, so a click on the
+transparent part of the window is still meant for the app behind and pins
+nothing.
+
+The gear still closes the panel: it pins on mouse-down here, then its action
+runs on mouse-up and wins. The `.onTapGesture` stays as a backstop for plain
+clicks, the path already known to work.
+
+### Verification
+
+`sendEvent` was driven directly with synthesized mouse-downs at both kinds of
+location:
+
+```
+start: displayedExpanded=true isExpanded=false
+after click on transparent region: isExpanded=false  (want false)
+after click on the panel body:     isExpanded=true   (want true)
+```
+
+Note on method: an earlier attempt used `NSEvent.addLocalMonitorForEvents` with
+an `event.window === self` check, tested by posting clicks with
+`CGEvent.postToPid`. The monitor fired, but the injected event carried
+`window=nil` — window association happens during real event routing, not for
+directly posted events — so that check could not be verified and, worse, its
+correctness depended on a field the test could not exercise. `sendEvent` needs
+no window check at all, which is why it replaced the monitor.
+
+---
+
+## 030 — A non-activating app's own clicks reach its global monitor (completes 029)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Symptom
+
+After 029, clicking inside the expanded panel *still* closed it.
+
+### Root cause
+
+`NSEvent.addGlobalMonitorForEvents` skips events delivered to the **active**
+app. This panel is deliberately non-activating (decision 006), so Tempo is never
+the active app — and its own panel's clicks therefore arrive at its own global
+monitor. Every click on the panel counted as a click *outside* it.
+
+Caught by instrumenting all three state-changing paths and driving a real
+session-level click at the panel:
+
+```
+HOVER true (isExpanded=false)
+SENDEVENT mouseDown loc=(68.0, 180.0) hit=true displayedExpanded=true
+SENDEVENT -> pinned isExpanded=true          <- 029's pin worked
+HOVER false (isExpanded=true)                <- correctly stayed open
+GLOBAL monitor fired -> collapsing           <- then this undid it
+```
+
+This predates 029. Decision 011's pin was a tap gesture, which fires on
+mouse-**up**, *after* this monitor's mouse-**down** — so it silently re-pinned
+what the monitor had just cleared, and the defect stayed hidden. Moving the pin
+to `sendEvent` (mouse-down) removed the accidental cover and exposed it.
+
+### Fix
+
+The monitor converts the cursor position into window coordinates and ignores
+the click when it lands on the drawn panel:
+
+```swift
+let point = self.convertPoint(fromScreen: NSEvent.mouseLocation)
+guard self.contentView?.hitTest(point) == nil else { return }
+```
+
+Same live-geometry hit region already used for passthrough (012) and the pin
+(029) — one definition of "on the panel", three uses.
+
+### Verification
+
+Real clicks posted at the panel and then well outside it:
+
+```
+SENDEVENT -> pinned isExpanded=true
+HOVER false (isExpanded=true)                        <- inside click: stays open
+GLOBAL monitor fired: onPanel=false -> COLLAPSING    <- outside click
+FINAL isExpanded=false isHovered=false               <- closed
+```
+
+### Lesson
+
+Two rounds of plausible reasoning about this (a local monitor's `event.window`,
+then `sendEvent`) each fixed something real and neither fixed the reported
+symptom, because the actual culprit was a third path nobody had instrumented.
+Logging every path that can mutate the state found it in one run.
+
+---
+
+## 031 — Liquid Glass paints no alpha, so clicks fell through it (amends 010)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Symptom
+
+Clicks on the expanded panel's **body** reached the app behind. Clicks on the
+album art, the usage graphs, the agent lights and the gear did not — reported
+precisely that way by the user, which is what made this findable.
+
+### Root cause
+
+macOS routes a click on a **non-opaque** window by the alpha in that window's
+backing store: fully transparent pixels pass the click to the window beneath.
+Decision 010's expanded background is `Color.clear.glassEffect(…)` — Liquid
+Glass is a *compositor* effect that samples what is behind the window and paints
+essentially no alpha of its own. So the panel's glass body was, to the window
+server, a hole.
+
+Everything that worked was a real pixel: the artwork bitmap, the sparkline
+paths, text, and the black top gradient. Everything that leaked was bare glass.
+
+The decisive evidence was an absence — with hit-testing instrumented, the
+leaking clicks produced **no `hitTest` call at all**:
+
+```
+outside-click monitor: onPanel=true -> ignored     <- monitor saw the click
+                                                   <- but no hitTest, no sendEvent
+```
+
+`NotchHostingView.hitTest` was never consulted, and when called directly at
+those same points it answered "hit" every time. The panel was willing to take
+the click; it was never offered it. That is a window-server routing decision,
+which is what pointed at alpha rather than at any code in this project.
+
+### Fix
+
+Paint a `shape.fill(Color.black.opacity(0.05))` substrate beneath the glass in
+the expanded branch of `backgroundShape`. Measured threshold:
+
+| substrate alpha | bare-glass click |
+|---|---|
+| 0.0 | passes through |
+| 0.02 | captured |
+| 0.10 | captured |
+
+0.05 is margin against 8-bit rounding and is imperceptible over the glass.
+Verified afterwards at four bare-glass points spread across the panel — all
+delivered.
+
+### Notes
+
+- The collapsed pill was never affected: it is `Color.black`, fully opaque.
+- This is why decision 029 and 030 each fixed something real without fixing the
+  reported symptom — the click never reached the code either of them changed.
+- Method note: two rounds of these measurements were wasted because the harness
+  grepped stderr while the instrumentation wrote to a file, so *every* trial
+  reported failure — including the 0.02 substrate that in fact worked. A test
+  that can only produce one answer is worse than no test; check that a harness
+  can report success before trusting a failure.

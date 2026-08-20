@@ -144,4 +144,44 @@ if ! plutil -lint "$APP_BUNDLE/Contents/Info.plist"; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# 5. Restart any instance that was running the bundle we just replaced.
+#    `open dist/Tempo.app` on an already-running app activates the existing
+#    process instead of launching the new binary, so without this a rebuild
+#    silently keeps testing the old build. Cost real debugging time once
+#    (2026-08-20): a process from before three rebuilds was still the one on
+#    screen, which read as "the new feature isn't there".
+#
+#    Quit *and relaunch*, never just quit: a rebuild has to hand back a running
+#    app in the state it found, otherwise it silently takes the notch off screen
+#    — which cost another round trip the first time this step only killed.
+#    An app that was not running stays not running.
+# ---------------------------------------------------------------------------
+# Match the bundle-relative suffix, not $APP_BUNDLE: the repo resolves under
+# both /Users/…/Documents/code/Tempo and /Users/…/documents/code/tempo (the
+# filesystem is case-insensitive, `pgrep -f` is not), so an absolute-path
+# pattern misses a process launched via the other spelling.
+RUNNING_PIDS="$(pgrep -f "${APP_NAME}.app/Contents/MacOS/${EXECUTABLE_NAME}" || true)"
+if [ -n "$RUNNING_PIDS" ]; then
+  echo "==> Quitting the running ${APP_NAME} (PID $(echo "$RUNNING_PIDS" | tr '\n' ' ' | sed 's/ $//')) so the next launch uses this build…"
+  # SIGTERM only: the app has no unsaved state, and a stuck process is the
+  # user's to deal with rather than something this script should SIGKILL.
+  echo "$RUNNING_PIDS" | xargs kill 2>/dev/null || true
+
+  # Wait for the old process to actually go before relaunching, so `open`
+  # can't find a live instance and just activate it again.
+  for _ in $(seq 1 20); do
+    pgrep -f "${APP_NAME}.app/Contents/MacOS/${EXECUTABLE_NAME}" >/dev/null || break
+    sleep 0.25
+  done
+
+  if pgrep -f "${APP_NAME}.app/Contents/MacOS/${EXECUTABLE_NAME}" >/dev/null; then
+    echo "==> WARNING: the old ${APP_NAME} did not exit; not relaunching. Quit it and run: open $APP_BUNDLE" >&2
+  else
+    echo "==> Relaunching ${APP_NAME}…"
+    open "$APP_BUNDLE" || echo "==> WARNING: relaunch failed; run: open $APP_BUNDLE" >&2
+  fi
+fi
+
 echo "==> Done: $APP_BUNDLE"
+echo "==> Launch it with: open $APP_BUNDLE  (already relaunched if it was running)"

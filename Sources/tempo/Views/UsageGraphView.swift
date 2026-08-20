@@ -1,9 +1,10 @@
 import SwiftUI
 
 /// Compact iStat-Menus-style CPU/memory row for the expanded panel: an icon,
-/// the current value, and an 80x22pt sparkline of the last 60 samples per
-/// metric, sourced from `SystemStatsService`. Headerless by design — the
-/// whole row is budgeted at <=30pt tall, and a section header (as
+/// the current value, and a 22pt-tall sparkline of the last 60 samples per
+/// metric, sourced from `SystemStatsService`. The two cells split the panel's
+/// full content width evenly, so each sparkline is as wide as the layout
+/// allows. Headerless by design — the whole row is budgeted at <=30pt tall, and a section header (as
 /// `AgentLightsView` uses for "Agents") would blow that budget for no
 /// glanceability gain; the `cpu`/`memorychip` glyphs already label each cell
 /// (UI Principle #1).
@@ -15,7 +16,7 @@ struct UsageGraphView: View {
             StatCell(symbolName: "cpu", label: "CPU", value: stats.cpuUsage, history: stats.cpuHistory)
             StatCell(symbolName: "memorychip", label: "Memory", value: stats.memUsage, history: stats.memHistory)
         }
-        .frame(height: 24, alignment: .center)
+        .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
         .onAppear {
             stats.start()
         }
@@ -48,8 +49,9 @@ private struct StatCell: View {
                 Sparkline(samples: history, filled: false)
                     .stroke(Color.secondary, lineWidth: 1)
             }
-            .frame(width: 80, height: 22)
+            .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 22)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
     }

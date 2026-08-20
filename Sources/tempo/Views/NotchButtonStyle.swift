@@ -9,6 +9,15 @@ import SwiftUI
 /// `configuration.isPressed`, a hover-only modifier cannot, so the press had
 /// no feedback at all before.
 struct NotchButtonStyle: ButtonStyle {
+    /// Highlight opacities, shared so anything that can't *be* a
+    /// `NotchButtonStyle` can still look like one. The playlist picker is a
+    /// `Menu`, which a ButtonStyle can't reach, so it mirrors these instead of
+    /// carrying its own magic numbers that would drift out of sync.
+    static let hoverFill: Double = 0.18
+    static let pressedFill: Double = 0.28
+    static let hoverStroke: Double = 0.60
+    static let hoverAnimation: Animation = .smooth(duration: 0.3)
+
     func makeBody(configuration: Configuration) -> some View {
         // Named anything but `Body`: that identifier is the protocol's own
         // associated type and shadowing it breaks the conformance.
@@ -28,14 +37,14 @@ struct NotchButtonStyle: ButtonStyle {
                 .background(Capsule().fill(Color.primary.opacity(fillOpacity)))
                 .contentShape(Rectangle())
                 .scaleEffect(configuration.isPressed ? 0.88 : (isHovered ? 1.06 : 1.0))
-                .animation(.smooth(duration: 0.3), value: isHovered)
+                .animation(NotchButtonStyle.hoverAnimation, value: isHovered)
                 .animation(.smooth(duration: 0.12), value: configuration.isPressed)
                 .onHover { isHovered = $0 }
         }
 
         private var fillOpacity: Double {
-            if configuration.isPressed { return 0.28 }
-            return isHovered ? 0.18 : 0
+            if configuration.isPressed { return NotchButtonStyle.pressedFill }
+            return isHovered ? NotchButtonStyle.hoverFill : 0
         }
     }
 }

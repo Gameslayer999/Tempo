@@ -83,13 +83,19 @@ struct ContentView: View {
     @ObservedObject var state: AppState
     @ObservedObject var music: MusicService
     @ObservedObject var api: SpotifyWebAPI
+    @ObservedObject var prefs: Preferences
+    /// Opens the Settings window (SettingsWindow.swift), owned by AppDelegate.
+    let openSettings: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let notchWidth = NotchGeometry.notchWidth
     private let stripHeight = NotchGeometry.stripHeight
     private let wingWidth = NotchGeometry.wingWidth
+    private let wingOuterInset = NotchGeometry.wingOuterInset
+    private let wingInnerInset = NotchGeometry.wingInnerInset
     private let contentSquare = NotchGeometry.contentSquare
+    private let wingContentWidth = NotchGeometry.wingContentWidth
     private let pillWidth = NotchGeometry.pillWidth
     private let panelWidth = NotchGeometry.panelWidth
     private let panelHeight = NotchGeometry.panelHeight
@@ -104,12 +110,40 @@ struct ContentView: View {
 
     @State private var hoverTask: Task<Void, Never>?
 
+    /// Pairs the collapsed pill's artwork square with the expanded panel's
+    /// larger artwork so the album cover travels between them instead of
+    /// cross-fading. Exactly one of the two is in the hierarchy at a time.
+    @Namespace private var artworkNamespace
+    private static let artworkID = "artwork"
+    /// Bounds for the expanded header's cover. Its actual side tracks the
+    /// measured height of the column beside it (`headerColumnHeight`) so the
+    /// two always line up — the column's height depends on font metrics and on
+    /// which rows are showing, which is not something to hard-code. The upper
+    /// bound keeps a transient row (the add-to-playlist error message) from
+    /// ballooning the cover.
+    /// Alpha painted under the expanded panel's glass so the window's backing
+    /// store is not transparent there — see `backgroundShape`. Measured
+    /// threshold: 0.0 lets clicks through, 0.02 already captures them; 0.05 is
+    /// margin against rounding and is imperceptible over the glass.
+    private static let glassSubstrateOpacity: Double = 0.05
+
+    private static let expandedArtMin: CGFloat = 72
+    private static let expandedArtMax: CGFloat = 116
+
     /// Measured natural height of `expandedContent` (its sections hide and
     /// show, so it isn't a constant). Drives the container's explicit —
     /// therefore spring-animatable — height, and the hit region's expanded
     /// target. The initial value only matters for the first frames of the
     /// very first expansion, before the first measurement lands.
-    @State private var expandedContentHeight: CGFloat = 157
+    @State private var expandedContentHeight: CGFloat = 135
+
+    /// Measured height of the title/transport/playlist column in the expanded
+    /// header. Drives the cover's side so the cover matches it.
+    @State private var headerColumnHeight: CGFloat = 104
+
+    private var expandedArtSize: CGFloat {
+        min(max(headerColumnHeight, Self.expandedArtMin), Self.expandedArtMax)
+    }
 
     // What the UI actually shows: pinned (click) or currently hovered.
     private var displayedExpanded: Bool { state.displayedExpanded }
@@ -153,6 +187,12 @@ struct ContentView: View {
         .contentShape(shape)
         .onHover(perform: handleHover)
         .onTapGesture {
+            // Backstop for the pin-on-click behaviour; the primary path is
+            // `NotchPanel.sendEvent`, which also catches clicks that a Button
+            // or Menu swallows before any gesture sees them. Kept because it is
+            // the path that was verified working for plain (non-control)
+            // clicks.
+            //
             // A click anywhere on the expanded panel that isn't a control
             // pins it open. This gesture lives on the foreground content
             // container (not the `.background()` layers) — SwiftUI's gesture
@@ -173,6 +213,9 @@ struct ContentView: View {
         // connects, an agent session starts) re-measures the content and must
         // retarget the height with the same spring, not snap.
         .animation(expandAnimation, value: expandedContentHeight)
+        // Cover resizes with the column rather than snapping when a row
+        // appears or disappears beside it.
+        .animation(expandAnimation, value: headerColumnHeight)
     }
 
     /// Collapsed: pure black, always (UI Principle #6 — must keep merging with
@@ -199,7 +242,23 @@ struct ContentView: View {
                 .opacity(displayedExpanded ? 0 : 1)
             if displayedExpanded {
                 ZStack(alignment: .top) {
+                    // Hit-testable substrate. macOS routes clicks on a
+                    // non-opaque window by the alpha in its backing store, and
+                    // Liquid Glass is a compositor effect over `Color.clear` —
+                    // it paints (almost) no alpha of its own, so bare glass let
+                    // clicks fall straight through to the app behind while the
+                    // artwork, graphs, text and the black top gradient (all
+                    // real pixels) caught them normally.
+                    shape.fill(Color.black.opacity(Self.glassSubstrateOpacity))
                     glassLayer
+                    // Clear glass passes the backdrop through almost intact,
+                    // so white text over a bright window is unreadable
+                    // without a scrim (Apple's own guidance for `.clear`).
+                    // The other styles already carry enough of their own
+                    // density and get none.
+                    if prefs.panelStyle == .clear {
+                        Color.black.opacity(0.22)
+                    }
                     // Blend the top of the panel to black so it keeps merging
                     // with the notch pill directly above it; the glass takes
                     // over below.
@@ -208,16 +267,72 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .clipShape(shape)
+                .overlay(borderLayer)
             }
         }
     }
 
+    /// Rim light around the expanded panel. Two strokes: a crisp 1.2pt edge
+    /// whose brightness varies down the panel (bright shoulders, dimmer
+    /// waist, bright base — how a real glass edge catches light), and a wider
+    /// blurred stroke under it that reads as the thickness of the material
+    /// rather than a drawn outline.
+    ///
+    /// Applied as an overlay *after* `clipShape`, so the stroke is not halved
+    /// by the clip. Masked to nothing across the top blend region: the panel's
+    /// first `stripHeight` points must stay pure black to merge with the notch
+    /// (UI Principle #6), and an outlined seam there would read as a floating
+    /// box hanging off the notch.
+    private var borderLayer: some View {
+        ZStack {
+            shape.stroke(
+                LinearGradient(
+                    colors: [.white.opacity(0.55), .white.opacity(0.16), .white.opacity(0.38)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ),
+                lineWidth: 1.2
+            )
+            shape.stroke(Color.white.opacity(0.14), lineWidth: 3)
+                .blur(radius: 2.5)
+        }
+        .mask {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: stripHeight)
+                LinearGradient(colors: [.clear, .white], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 24)
+                Color.white
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// The panel's material, per `prefs.panelStyle` (decision 029).
+    ///
+    /// Below macOS 26 there is no `glassEffect` at all, so the three glass
+    /// styles degrade to the nearest `Material` — the picker keeps working and
+    /// still visibly changes the panel, it just isn't Liquid Glass. `.solid`
+    /// is identical on every version.
     @ViewBuilder
     private var glassLayer: some View {
-        if #available(macOS 26.0, *) {
-            Color.clear.glassEffect(.regular, in: shape)
+        if prefs.panelStyle == .solid {
+            shape.fill(Color.black.opacity(0.93))
+        } else if #available(macOS 26.0, *) {
+            Color.clear.glassEffect(glass, in: shape)
         } else {
-            shape.fill(.ultraThinMaterial)
+            shape.fill(prefs.panelStyle == .clear ? .ultraThinMaterial : .regularMaterial)
+        }
+    }
+
+    /// `.tint(nil)` is defined as "no tint", so a track with no artwork (or a
+    /// cover we couldn't sample) falls back to plain regular glass instead of
+    /// needing a separate branch.
+    @available(macOS 26.0, *)
+    private var glass: Glass {
+        switch prefs.panelStyle {
+        case .clear: return .clear
+        case .tinted: return .regular.tint(state.artworkTint.map { Color(nsColor: $0).opacity(0.55) })
+        case .regular, .solid: return .regular
         }
     }
 
@@ -245,70 +360,79 @@ struct ContentView: View {
     // MARK: Collapsed pill
 
     /// Artwork square in the left wing, visualizer square in the right wing,
-    /// the physical notch untouched between them.
+    /// the physical notch untouched between them. Both squares are inset from
+    /// the pill's outer edges by `wingOuterInset`, which clears the concave
+    /// top corner and the rounded bottom corner of `NotchShape` — flush
+    /// content pokes outside the black fill there.
+    ///
+    /// While expanded the artwork is not here: it has moved into the panel
+    /// header (`nowPlayingHeader`). Its slot keeps its width either way, so
+    /// the visualizer and the notch gap never shift.
     private var strip: some View {
         HStack(spacing: 0) {
-            artworkView
-                .frame(width: wingWidth, height: stripHeight)
+            Color.clear
+                .frame(width: wingContentWidth, height: contentSquare)
+                .overlay {
+                    if !displayedExpanded {
+                        artworkView(side: contentSquare, cornerRadius: 4)
+                            .matchedGeometryEffect(id: Self.artworkID, in: artworkNamespace)
+                    }
+                }
+                .padding(.leading, wingOuterInset)
+                .padding(.trailing, wingInnerInset)
+                .frame(height: stripHeight)
             Spacer()
                 .frame(width: notchWidth)
-            VisualizerView(isPlaying: state.nowPlaying?.isPlaying ?? false)
-                .frame(width: contentSquare, height: contentSquare)
-                .frame(width: wingWidth, height: stripHeight)
+            Color.clear
+                .frame(width: wingContentWidth, height: contentSquare)
+                .overlay {
+                    if prefs.showVisualizer {
+                        VisualizerView(isPlaying: state.nowPlaying?.isPlaying ?? false)
+                    }
+                }
+                .padding(.leading, wingInnerInset)
+                .padding(.trailing, wingOuterInset)
+                .frame(height: stripHeight)
         }
         .frame(width: pillWidth, height: stripHeight, alignment: .top)
     }
 
-    private var artworkView: some View {
+    private func artworkView(side: CGFloat, cornerRadius: CGFloat) -> some View {
         Group {
             if let artwork = state.artwork {
                 Image(nsImage: artwork)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(Color.gray.opacity(0.4))
             }
         }
-        .frame(width: contentSquare, height: contentSquare)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .frame(width: side, height: side)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
     }
 
     // MARK: Expanded content
 
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(state.nowPlaying?.track ?? "Nothing playing")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                Text(state.nowPlaying?.artist ?? "")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+            nowPlayingHeader
+            if prefs.showUsageGraph {
+                UsageGraphView()
             }
-            .shadow(color: .black.opacity(0.5), radius: 3)
-
-            HStack(spacing: 12) {
-                Button(action: { music.previousTrack() }) {
-                    Image(systemName: "backward.fill")
-                }
-                Button(action: { music.playPause() }) {
-                    Image(systemName: (state.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
-                }
-                Button(action: { music.nextTrack() }) {
-                    Image(systemName: "forward.fill")
-                }
+            if prefs.showAgentLights {
+                AgentLightsView(sessions: state.sessions)
             }
-            .buttonStyle(NotchButtonStyle())
-            .foregroundColor(.primary)
-            .font(.system(size: 16, weight: .medium))
-            .shadow(color: .black.opacity(0.5), radius: 3)
-
-            PlaylistSection(api: api, state: state)
-            UsageGraphView()
-            AgentLightsView(sessions: state.sessions)
+        }
+        // Top-right corner of the panel content. An overlay rather than a
+        // member of the header row: in the row it would consume width on one
+        // side only, pulling the centred title off the play button.
+        .overlay(alignment: .topTrailing) {
+            settingsButton
+                // Cancel the button style's own padding so the glyph sits on
+                // the content inset rather than 8pt inside it.
+                .padding(.trailing, -8)
+                .padding(.top, -4)
         }
         // Horizontal inset clears the shape's straight sides, which sit
         // `expandedTopRadius` inside the panel rect.
@@ -328,6 +452,100 @@ struct ContentView: View {
                     }
             }
         )
+    }
+
+    /// Album art on the left; to its right, the title and artist centred over
+    /// a transport row spread across the remaining width — so the play/pause
+    /// button sits directly under the title, and cover + controls together
+    /// occupy the full content width. The artwork is the same square that was
+    /// in the collapsed pill's left wing, travelling here via
+    /// `matchedGeometryEffect`.
+    private var nowPlayingHeader: some View {
+        HStack(alignment: .center, spacing: 14) {
+            artworkView(side: expandedArtSize, cornerRadius: 12)
+                .matchedGeometryEffect(id: Self.artworkID, in: artworkNamespace)
+                .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
+
+            VStack(spacing: 6) {
+                VStack(spacing: 2) {
+                    Text(state.nowPlaying?.track ?? "Nothing playing")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    Text(state.nowPlaying?.artist ?? "")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                // Symmetric, so the title stays centred on the play button
+                // while still keeping clear of the gear in the corner.
+                .padding(.horizontal, 24)
+                .shadow(color: .black.opacity(0.5), radius: 3)
+
+                // Evenly spread: with equal spacers the middle button lands on
+                // the column's centre line, directly below the title.
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    Button(action: { music.previousTrack() }) {
+                        Image(systemName: "backward.fill")
+                    }
+                    Spacer(minLength: 0)
+                    Button(action: { music.playPause() }) {
+                        Image(systemName: (state.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
+                    }
+                    Spacer(minLength: 0)
+                    Button(action: { music.nextTrack() }) {
+                        Image(systemName: "forward.fill")
+                    }
+                    Spacer(minLength: 0)
+                }
+                .buttonStyle(NotchButtonStyle())
+                .foregroundColor(.primary)
+                .font(.system(size: 17, weight: .medium))
+                .shadow(color: .black.opacity(0.5), radius: 3)
+                .frame(maxWidth: .infinity)
+
+                PlaylistSection(api: api, state: state, prefs: prefs)
+            }
+            // The column sets the header's height; the cover matches it.
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { reportHeaderColumnHeight(geo.size.height) }
+                        .onChange(of: geo.size.height) { _, newHeight in
+                            reportHeaderColumnHeight(newHeight)
+                        }
+                }
+            )
+        }
+    }
+
+    private func reportHeaderColumnHeight(_ height: CGFloat) {
+        guard height > 0, height != headerColumnHeight else { return }
+        headerColumnHeight = height
+    }
+
+    /// Opens the Settings window and collapses the panel on the way out. The
+    /// collapse is explicit because the panel would otherwise stay pinned:
+    /// NotchPanel's outside-click monitor is a *global* monitor, and a click
+    /// in Tempo's own Settings window is not global.
+    private var settingsButton: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                state.isExpanded = false
+                state.isHovered = false
+            }
+            openSettings()
+        }) {
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: 13, weight: .medium))
+        }
+        .buttonStyle(NotchButtonStyle())
+        .foregroundColor(.secondary)
+        .shadow(color: .black.opacity(0.5), radius: 3)
+        .help("Tempo Settings")
     }
 
     /// Feeds the measured expanded-content height to the animatable container
