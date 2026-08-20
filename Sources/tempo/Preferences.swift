@@ -34,7 +34,7 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(showAgentLights, forKey: Key.showAgentLights) }
     }
 
-    /// Material of the expanded panel (decision 029). Persisted by raw value,
+    /// Material of the expanded panel (decision 030). Persisted by raw value,
     /// so an unknown string from a future/older build falls back to `.regular`
     /// rather than failing to decode.
     @Published var panelStyle: PanelStyle {
@@ -121,7 +121,7 @@ final class Preferences: ObservableObject {
     }
 }
 
-/// The four materials the expanded panel can be drawn in (decision 029).
+/// The four materials the expanded panel can be drawn in (decision 030).
 /// `regular`/`clear` map straight onto macOS 26's two real `Glass` variants;
 /// `tinted` is `regular` carrying the album artwork's colour; `solid` opts out
 /// of glass entirely.

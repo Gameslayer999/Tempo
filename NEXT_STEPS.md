@@ -148,13 +148,13 @@
   glass fixes it (measured: 0.0 leaks, 0.02 already captures).
 
 - **2026-08-20** — Clicking inside the expanded panel no longer closes it
-  (decision 030): the outside-click global monitor was firing for Tempo's *own*
+  (decision 033): the outside-click global monitor was firing for Tempo's *own*
   clicks, because a global monitor only skips events delivered to the **active**
   app and this panel is deliberately non-activating. It now ignores clicks that
   land on the drawn panel. Verified end-to-end with real posted clicks.
 
 - **2026-08-20** — Clicking a control in the expanded panel now pins it
-  (decision 029): the pin moved from a SwiftUI tap gesture — which `Button` and
+  (decision 032): the pin moved from a SwiftUI tap gesture — which `Button` and
   `Menu` swallow — to `NotchPanel.sendEvent`, gated on the same hit region used
   for passthrough. Fixes the panel collapsing out from under the playlist menu.
 

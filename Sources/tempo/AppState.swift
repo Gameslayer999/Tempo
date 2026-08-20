@@ -13,7 +13,7 @@ final class AppState: ObservableObject {
         didSet { artworkTint = artwork?.dominantColor() }
     }
     /// Dominant colour of the current cover, recomputed only when the cover
-    /// itself changes. Drives the `.tinted` panel style (decision 029); nil
+    /// itself changes. Drives the `.tinted` panel style (decision 030); nil
     /// when there is no artwork, which that style reads as plain glass.
     @Published private(set) var artworkTint: NSColor? = nil
     @Published var sessions: [AgentSession] = []

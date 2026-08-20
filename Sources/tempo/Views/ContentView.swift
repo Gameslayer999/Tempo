@@ -307,7 +307,7 @@ struct ContentView: View {
         .allowsHitTesting(false)
     }
 
-    /// The panel's material, per `prefs.panelStyle` (decision 029).
+    /// The panel's material, per `prefs.panelStyle` (decision 030).
     ///
     /// Below macOS 26 there is no `glassEffect` at all, so the three glass
     /// styles degrade to the nearest `Material` — the picker keeps working and

@@ -38,11 +38,11 @@
 | 026 | 2026-08-20 | Playlist picker lists only playlists the user can add to (owned or collaborative), and add-failures report Spotify's actual reason — amends 003 | Accepted |
 | 027 | 2026-08-20 | Playlist search lives in Settings (searchable list + chosen favorites), not in the notch panel — the panel stays non-key | Accepted |
 | 028 | 2026-08-20 | Expanded header: 72pt cover, title centred over the play button, transport spread full width, gear as a corner overlay — amends 019 | Accepted |
-| 029 | 2026-08-20 | Pin-on-click moves to `NotchPanel.sendEvent` so clicks on controls also pin the panel; only an outside click closes it — amends 011 | Accepted |
-| 030 | 2026-08-20 | The outside-click monitor must ignore clicks that land on the panel: a non-activating app's own clicks reach its global monitor — completes 029 | Accepted |
-| 031 | 2026-08-20 | Paint a 5% substrate under the expanded panel's glass: macOS routes clicks on a non-opaque window by backing-store alpha, and Liquid Glass paints none — amends 010 | Accepted |
 | 029 | 2026-08-20 | Expanded panel gets a visible glass rim: gradient 1.2pt stroke + blurred 3pt under-stroke, overlaid outside the clip, masked off across the black notch-merge band — amends 010 | Accepted |
 | 030 | 2026-08-20 | Panel material is a preference: regular / clear / album-tinted glass / solid, from the only three real `Glass` variants plus an opt-out — amends 010 | Accepted |
+| 031 | 2026-08-20 | Paint a 5% substrate under the expanded panel's glass: macOS routes clicks on a non-opaque window by backing-store alpha, and Liquid Glass paints none — amends 010 | Accepted |
+| 032 | 2026-08-20 | Pin-on-click moves to `NotchPanel.sendEvent` so clicks on controls also pin the panel; only an outside click closes it — amends 011 | Accepted |
+| 033 | 2026-08-20 | The outside-click monitor must ignore clicks that land on the panel: a non-activating app's own clicks reach its global monitor — completes 032 | Accepted |
 
 ---
 
@@ -1216,124 +1216,6 @@ choice. The rim from 029 is drawn for all four styles.
 
 ---
 
-## 029 — Clicking anything in the panel pins it (amends 011)
-
-**Date:** 2026-08-20 · **Status:** Accepted
-
-### Symptom
-
-Clicking inside the expanded panel could still collapse it. Only an outside
-click was supposed to.
-
-### Root cause
-
-Decision 011's pin was a SwiftUI `.onTapGesture` on the content container. A
-`Button` or a `Menu` consumes the tap before any gesture on the container sees
-it, so clicking a *control* never set `isExpanded`. The panel therefore stayed
-merely hover-expanded, and the next hover-out collapsed it. The playlist picker
-made this sharp: opening its menu moves the pointer onto the menu's own window,
-hover-out fires, and the panel collapsed out from under the menu the user had
-just opened.
-
-### Decision
-
-Pin in `NotchPanel.sendEvent(_:)` — the window's own entry point for every
-event routed to it, reached before any view can swallow the mouse-down.
-
-Gated on `contentView?.hitTest(event.locationInWindow) != nil`, which is the
-same live-geometry region decision 012 uses for passthrough, so a click on the
-transparent part of the window is still meant for the app behind and pins
-nothing.
-
-The gear still closes the panel: it pins on mouse-down here, then its action
-runs on mouse-up and wins. The `.onTapGesture` stays as a backstop for plain
-clicks, the path already known to work.
-
-### Verification
-
-`sendEvent` was driven directly with synthesized mouse-downs at both kinds of
-location:
-
-```
-start: displayedExpanded=true isExpanded=false
-after click on transparent region: isExpanded=false  (want false)
-after click on the panel body:     isExpanded=true   (want true)
-```
-
-Note on method: an earlier attempt used `NSEvent.addLocalMonitorForEvents` with
-an `event.window === self` check, tested by posting clicks with
-`CGEvent.postToPid`. The monitor fired, but the injected event carried
-`window=nil` — window association happens during real event routing, not for
-directly posted events — so that check could not be verified and, worse, its
-correctness depended on a field the test could not exercise. `sendEvent` needs
-no window check at all, which is why it replaced the monitor.
-
----
-
-## 030 — A non-activating app's own clicks reach its global monitor (completes 029)
-
-**Date:** 2026-08-20 · **Status:** Accepted
-
-### Symptom
-
-After 029, clicking inside the expanded panel *still* closed it.
-
-### Root cause
-
-`NSEvent.addGlobalMonitorForEvents` skips events delivered to the **active**
-app. This panel is deliberately non-activating (decision 006), so Tempo is never
-the active app — and its own panel's clicks therefore arrive at its own global
-monitor. Every click on the panel counted as a click *outside* it.
-
-Caught by instrumenting all three state-changing paths and driving a real
-session-level click at the panel:
-
-```
-HOVER true (isExpanded=false)
-SENDEVENT mouseDown loc=(68.0, 180.0) hit=true displayedExpanded=true
-SENDEVENT -> pinned isExpanded=true          <- 029's pin worked
-HOVER false (isExpanded=true)                <- correctly stayed open
-GLOBAL monitor fired -> collapsing           <- then this undid it
-```
-
-This predates 029. Decision 011's pin was a tap gesture, which fires on
-mouse-**up**, *after* this monitor's mouse-**down** — so it silently re-pinned
-what the monitor had just cleared, and the defect stayed hidden. Moving the pin
-to `sendEvent` (mouse-down) removed the accidental cover and exposed it.
-
-### Fix
-
-The monitor converts the cursor position into window coordinates and ignores
-the click when it lands on the drawn panel:
-
-```swift
-let point = self.convertPoint(fromScreen: NSEvent.mouseLocation)
-guard self.contentView?.hitTest(point) == nil else { return }
-```
-
-Same live-geometry hit region already used for passthrough (012) and the pin
-(029) — one definition of "on the panel", three uses.
-
-### Verification
-
-Real clicks posted at the panel and then well outside it:
-
-```
-SENDEVENT -> pinned isExpanded=true
-HOVER false (isExpanded=true)                        <- inside click: stays open
-GLOBAL monitor fired: onPanel=false -> COLLAPSING    <- outside click
-FINAL isExpanded=false isHovered=false               <- closed
-```
-
-### Lesson
-
-Two rounds of plausible reasoning about this (a local monitor's `event.window`,
-then `sendEvent`) each fixed something real and neither fixed the reported
-symptom, because the actual culprit was a third path nobody had instrumented.
-Logging every path that can mutate the state found it in one run.
-
----
-
 ## 031 — Liquid Glass paints no alpha, so clicks fell through it (amends 010)
 
 **Date:** 2026-08-20 · **Status:** Accepted
@@ -1387,10 +1269,129 @@ delivered.
 ### Notes
 
 - The collapsed pill was never affected: it is `Color.black`, fully opaque.
-- This is why decision 029 and 030 each fixed something real without fixing the
+- This is why decision 032 and 033 each fixed something real without fixing the
   reported symptom — the click never reached the code either of them changed.
 - Method note: two rounds of these measurements were wasted because the harness
   grepped stderr while the instrumentation wrote to a file, so *every* trial
   reported failure — including the 0.02 substrate that in fact worked. A test
   that can only produce one answer is worse than no test; check that a harness
   can report success before trusting a failure.
+
+
+---
+
+## 032 — Clicking anything in the panel pins it (amends 011)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Symptom
+
+Clicking inside the expanded panel could still collapse it. Only an outside
+click was supposed to.
+
+### Root cause
+
+Decision 011's pin was a SwiftUI `.onTapGesture` on the content container. A
+`Button` or a `Menu` consumes the tap before any gesture on the container sees
+it, so clicking a *control* never set `isExpanded`. The panel therefore stayed
+merely hover-expanded, and the next hover-out collapsed it. The playlist picker
+made this sharp: opening its menu moves the pointer onto the menu's own window,
+hover-out fires, and the panel collapsed out from under the menu the user had
+just opened.
+
+### Decision
+
+Pin in `NotchPanel.sendEvent(_:)` — the window's own entry point for every
+event routed to it, reached before any view can swallow the mouse-down.
+
+Gated on `contentView?.hitTest(event.locationInWindow) != nil`, which is the
+same live-geometry region decision 012 uses for passthrough, so a click on the
+transparent part of the window is still meant for the app behind and pins
+nothing.
+
+The gear still closes the panel: it pins on mouse-down here, then its action
+runs on mouse-up and wins. The `.onTapGesture` stays as a backstop for plain
+clicks, the path already known to work.
+
+### Verification
+
+`sendEvent` was driven directly with synthesized mouse-downs at both kinds of
+location:
+
+```
+start: displayedExpanded=true isExpanded=false
+after click on transparent region: isExpanded=false  (want false)
+after click on the panel body:     isExpanded=true   (want true)
+```
+
+Note on method: an earlier attempt used `NSEvent.addLocalMonitorForEvents` with
+an `event.window === self` check, tested by posting clicks with
+`CGEvent.postToPid`. The monitor fired, but the injected event carried
+`window=nil` — window association happens during real event routing, not for
+directly posted events — so that check could not be verified and, worse, its
+correctness depended on a field the test could not exercise. `sendEvent` needs
+no window check at all, which is why it replaced the monitor.
+
+---
+
+## 033 — A non-activating app's own clicks reach its global monitor (completes 032)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Symptom
+
+After 032, clicking inside the expanded panel *still* closed it.
+
+### Root cause
+
+`NSEvent.addGlobalMonitorForEvents` skips events delivered to the **active**
+app. This panel is deliberately non-activating (decision 006), so Tempo is never
+the active app — and its own panel's clicks therefore arrive at its own global
+monitor. Every click on the panel counted as a click *outside* it.
+
+Caught by instrumenting all three state-changing paths and driving a real
+session-level click at the panel:
+
+```
+HOVER true (isExpanded=false)
+SENDEVENT mouseDown loc=(68.0, 180.0) hit=true displayedExpanded=true
+SENDEVENT -> pinned isExpanded=true          <- 032's pin worked
+HOVER false (isExpanded=true)                <- correctly stayed open
+GLOBAL monitor fired -> collapsing           <- then this undid it
+```
+
+This predates 032. Decision 011's pin was a tap gesture, which fires on
+mouse-**up**, *after* this monitor's mouse-**down** — so it silently re-pinned
+what the monitor had just cleared, and the defect stayed hidden. Moving the pin
+to `sendEvent` (mouse-down) removed the accidental cover and exposed it.
+
+### Fix
+
+The monitor converts the cursor position into window coordinates and ignores
+the click when it lands on the drawn panel:
+
+```swift
+let point = self.convertPoint(fromScreen: NSEvent.mouseLocation)
+guard self.contentView?.hitTest(point) == nil else { return }
+```
+
+Same live-geometry hit region already used for passthrough (012) and the pin
+(032) — one definition of "on the panel", three uses.
+
+### Verification
+
+Real clicks posted at the panel and then well outside it:
+
+```
+SENDEVENT -> pinned isExpanded=true
+HOVER false (isExpanded=true)                        <- inside click: stays open
+GLOBAL monitor fired: onPanel=false -> COLLAPSING    <- outside click
+FINAL isExpanded=false isHovered=false               <- closed
+```
+
+### Lesson
+
+Two rounds of plausible reasoning about this (a local monitor's `event.window`,
+then `sendEvent`) each fixed something real and neither fixed the reported
+symptom, because the actual culprit was a third path nobody had instrumented.
+Logging every path that can mutate the state found it in one run.
