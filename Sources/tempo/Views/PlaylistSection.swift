@@ -34,9 +34,8 @@ struct PlaylistSection: View {
             Label("Connect Spotify", systemImage: "link")
                 .font(.system(size: 12, weight: .medium))
         }
-        .buttonStyle(.plain)
-        .foregroundColor(.white.opacity(0.85))
-        .hoverScale()
+        .buttonStyle(NotchButtonStyle())
+        .foregroundColor(.primary)
     }
 
     private var playlistRow: some View {
@@ -50,20 +49,19 @@ struct PlaylistSection: View {
             } label: {
                 Text(selectedName)
                     .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.85))
+                    .foregroundColor(.primary)
                     .lineLimit(1)
                     .frame(maxWidth: 220, alignment: .leading)
             }
             .menuStyle(.borderlessButton)
             .frame(maxWidth: 220)
             .disabled(api.playlists.isEmpty)
-            .hoverScale()
 
             Spacer(minLength: 4)
 
             addButton
         }
-        .frame(height: 20)
+        .frame(height: 28)
         .onAppear {
             if api.playlists.isEmpty {
                 Task { await api.loadPlaylists() }
@@ -97,12 +95,11 @@ struct PlaylistSection: View {
                     .foregroundColor(.orange)
             }
         }
-        .buttonStyle(.plain)
-        .foregroundColor(.white.opacity(0.85))
+        .buttonStyle(NotchButtonStyle())
+        .foregroundColor(.primary)
         .font(.system(size: 13, weight: .medium))
         .disabled(!canAdd || isAdding)
         .opacity(canAdd ? 1 : 0.35)
-        .hoverScale()
     }
 
     private var canAdd: Bool {

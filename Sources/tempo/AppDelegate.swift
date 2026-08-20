@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         music.start()
         agentStatus.start()
         spotifyAPI.start()
+        // Start sampling at launch (not first panel-open) so the usage graph
+        // has real history the first time the user expands. ~2 Mach calls/sec.
+        SystemStatsService.shared.start()
 
         let content = ContentView(state: state, music: music, api: spotifyAPI)
         let panel = NotchPanel(state: state, content: content)

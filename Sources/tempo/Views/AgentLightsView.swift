@@ -17,7 +17,7 @@ struct AgentLightsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Agents")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.gray)
+                    .foregroundColor(.secondary)
                     .textCase(.uppercase)
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -47,7 +47,7 @@ private struct AgentLight: View {
             indicator
             Text(session.label)
                 .font(.system(size: 11))
-                .foregroundColor(.gray.opacity(0.9))
+                .foregroundColor(.secondary)
                 .lineLimit(1)
         }
         .onAppear {

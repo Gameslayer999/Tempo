@@ -7,67 +7,83 @@
 
 ## Current state
 
-- **v1 feature set implemented and building clean (2026-08-19).** `swift build` (debug
-  and release) exits 0 with zero warnings; the app runs as an accessory-policy process
-  drawing a notch-hugging non-activating NSPanel (decisions 006/008). Implemented:
-  - **Spotify now-playing + transport** (`Services/MusicService.swift`) — 1s AppleScript
-    poll (compiled once, reused), guarded by `NSRunningApplication` so Spotify is never
-    launched as a side effect; artwork downloaded off-main when the URL changes;
-    play/pause/prev/next with an immediate re-poll after each command. Fetch script and
-    `playpause` verified live against the real Spotify app (see decision 002 addendum,
-    including the `st` variable-name gotcha).
-  - **Visualizer** (`Views/VisualizerView.swift`) — 5 capsule bars, per-bar layered
-    sine functions driven by `TimelineView(.animation)` (no timers); eases to
-    motionless stubs over 0.35s when paused (decision 004).
-  - **Add-to-playlist** (`Services/SpotifyWebAPI.swift`, `Views/PlaylistSection.swift`)
-    — PKCE per decision 003: config + tokens in `~/Library/Application Support/Tempo/`
-    (0600/0700), one-shot NWListener on 127.0.0.1:8888, rotating refresh tokens,
-    playlist pagination capped at 200, compact picker + add-button row with transient
-    success/failure feedback. Hides entirely when unconfigured. **The live OAuth
-    round-trip is unverified** — no Client ID is configured on this machine yet.
-  - **AgentStatus lights** (`Services/AgentStatusService.swift`,
-    `Views/AgentLightsView.swift`) — read-only 2s poll of
-    `~/.claude/status/sessions/*.json` (parsing verified against a live file), 2h
-    staleness cutoff, attention-first sort, blocked lights pulse, unknown states render
-    as hollow rings, feature hides when the directory is absent (decision 005).
-- **Not yet verified by a human:** the panel's visual alignment with the physical
-  notch, expand/collapse feel, click-through behavior, transport buttons end-to-end
-  from the UI, and the full OAuth flow. Automated checks stop at "builds clean, runs,
-  stays alive, AppleScript/status parsing verified at the shell level".
+- **Core-functionality rework landed (2026-08-20), decisions 012–018.** Debug and
+  release builds exit 0; the app now runs primarily as a signed bundle
+  (`scripts/make-app.sh` → `dist/Tempo.app` — required for audio capture). What
+  changed this session:
+  - **Click-fallthrough bug fixed** (decision 012): the hit region now tracks the
+    live animating shape geometry instead of the expanded/collapsed flag, so a
+    click on a still-visible control mid-collapse can no longer fall through to
+    the window behind. Verified by driving the compiled sources through
+    `hitTest` at every animation step. Root-cause note: stock
+    `NSHostingView.hitTest` claims its whole bounds on macOS 26.6 — the custom
+    override is load-bearing.
+  - **Dynamic-Island pill** (013): collapsed width is now content-fit
+    (notch + artwork wing + visualizer wing = 255pt on this machine, was 405),
+    concave-top `NotchShape`, content-sized expanded panel (no more fixed-height
+    overflow/dead glass).
+  - **Motion/controls per boringNotch + HIG** (014): 0.25s hover dwell, 0.1s
+    hover-out debounce, open spring (0.42/0.8), critically-damped close
+    (0.45/1.0), Reduce Motion fades, 28pt hit targets, press states
+    (`NotchButtonStyle`), semantic colors.
+  - **Event-driven Spotify** (015): `PlaybackStateChanged` distributed
+    notification (verified live; title-case `Player State`, no artwork key)
+    replaces the 1s AppleScript poll; one AppleScript fetch per track change +
+    30s reconciliation while Spotify runs.
+  - **Real audio visualizer** (016): Core Audio per-process tap on Spotify,
+    5-band vDSP FFT, 30Hz asymmetric-smoothed bars (bass center). Verified
+    capturing real music via a signed harness. Falls back silently to the old
+    playback-synced animation when unauthorized (bare binary always is — TCC
+    denial is silent zeros) or on macOS <14.2. Zero redraws/timers at rest.
+  - **Usage graph** (017): CPU + memory 1Hz sampling, 60-sample Path-based
+    sparklines (never Canvas — ~93MB one-time Metal cost), fixed 0–100 scale.
+  - **Packaging** (018): idempotent `scripts/make-app.sh`, ad-hoc signed (no
+    Apple Development identity on this machine).
+- **Measured performance:** idle/paused ≈ **0.3% CPU** (was 3–7% constantly —
+  the old visualizer redrew at display refresh forever). While playing ≈ 4–8%
+  (30Hz SwiftUI update churn; see "Now").
+- **Not yet verified by a human:** pill/panel look and feel, hover dwell feel,
+  click-to-pause reliability in real use, the reactive visualizer visually, the
+  usage graph rendering, agent-light legibility on glass, OAuth flow (still no
+  Client ID configured).
 
 ## Now
 
-- [ ] **User verification pass** — run `.build/release/tempo`, approve the one-time
-      Automation prompt (Tempo → Spotify), and check: strip hugs the notch; artwork +
-      visualizer render; hover expands the Liquid Glass panel with a haptic tick,
-      mouse-off collapses it, click pins it, click outside unpins (decision 011);
-      the 0.15s hover-out debounce feels natural; controls work; agent lights match
-      open sessions; clicks outside the strip pass through to other apps.
-- [ ] **Check PlaylistSection / AgentLightsView contrast on glass** — the glass
-      change added text shadows to ContentView's own controls only; the other two
-      views' legibility over a light desktop is unverified.
-- [ ] **Verify the OAuth flow live** — create the Spotify Developer app (README
-      steps), add the Client ID to config.json, run Connect Spotify, add a song to a
-      playlist. Fix whatever the first real round-trip surfaces.
+- [ ] **User verification pass** — run `scripts/make-app.sh`, `open dist/Tempo.app`,
+      approve the two permission prompts (Automation → Spotify, System Audio
+      Recording), then check: pill hugs the notch and is content-width; hover
+      dwell feels right (0.25s); pause always takes the click (the original bug);
+      bars genuinely follow the music; usage sparklines render; panel height fits
+      its sections with none hidden/shown oddly; clicks beside/below the pill
+      still reach other apps.
+- [ ] **Visualizer render cost** — while playing, the 30Hz SwiftUI update path
+      costs ~4–8% CPU (profiled: AttributeGraph/view churn, not DSP). If that
+      reads high in real use: try `drawingGroup()` on the bar row, a 20Hz pump,
+      or publishing only quantized level changes.
+- [ ] **Self-signed "Tempo" certificate** for stable TCC identity across rebuilds
+      (AgentStatus already uses this pattern on this machine — port it, script
+      it). Until then rebuilds may re-prompt for Automation/audio.
+- [ ] **Verify the OAuth flow live** — create the Spotify Developer app (README),
+      add the Client ID, Connect Spotify, add a song to a playlist.
 
 ## Next
 
-- [ ] `.app` bundle script (Info.plist: `LSUIElement`, `NSAppleEventsUsageDescription`)
-      so Tempo can be a login item and get stable TCC identity.
-- [ ] Agent lights in the *collapsed* strip (tiny dots) — currently expanded-only.
-- [ ] Settings surface (poll interval, show/hide lights, visualizer style).
+- [ ] Agent lights in the *collapsed* pill (tiny dots) — currently expanded-only.
+- [ ] Playlist `Menu` has no hover affordance since `HoverScale` was replaced
+      (`NotchButtonStyle` can't style a `Menu`) — decide whether it needs one.
+- [ ] Settings surface (hover dwell, show/hide lights/usage, visualizer style).
+- [ ] Login item via the bundled app.
 
 ## Later
 
-- [ ] Apple Music support (AppleScript dictionary exists; artwork via `artworks` raw
-      data instead of a URL).
-- [ ] Real audio-reactive visualizer (Core Audio process tap) — deferred per
-      decision 004.
-- [ ] Self-sufficient agent-status signal layer (bundle a hook installer for machines
-      without AgentStatus) — deferred per decision 005.
+- [ ] Apple Music support (AppleScript dictionary exists; artwork via `artworks`
+      raw data instead of a URL).
+- [ ] Network throughput in the usage row (Notchy shows it; `getifaddrs` deltas,
+      filter `utun*`/`awdl*`/`bridge*`).
+- [ ] Self-sufficient agent-status signal layer (bundle a hook installer for
+      machines without AgentStatus) — deferred per decision 005.
 - [ ] Click a light → focus that session (port AgentStatus's focus logic).
-- [ ] Calendar / battery / file-shelf modules (category table stakes, explicitly out
-      of v1 scope).
+- [ ] Calendar / battery / file-shelf modules (category table stakes, out of v1).
 
 ## Decisions needed
 
@@ -75,23 +91,19 @@
 
 ## Recently completed
 
-- **2026-08-19** — Pin bug fixed (011 addendum): the pin tap gesture sat on the
-  `.background()` glass layer, which SwiftUI never routes taps to — proven at runtime
-  with synthesized CGEvents — and was moved to the foreground content container. All
-  interactive controls (transport, playlist menu/add, Connect) now spring-scale
-  1.15× on hover via a shared `hoverScale()` modifier.
-- **2026-08-19** — Interaction model reworked (decision 011, revising 009): hover
-  fully expands with a trackpad haptic tick, mouse-off collapses (0.15s debounce),
-  click pins, click outside unpins; the 10×4pt hover-grow and its dead-zone
-  constants removed.
-- **2026-08-19** — Hover-grow on the collapsed strip (decision 009) and Liquid Glass
-  on the expanded panel (decision 010), after checking boringNotch's hover source and
-  Notchy's glass styling; `glassEffect` verified against the macOS 26.5 SDK with an
-  `.ultraThinMaterial` fallback.
-- **2026-08-19** — v1 features implemented in parallel (music service, visualizer,
-  add-to-playlist, agent lights) against the scaffold's stub interfaces; one
-  integration fix (actor isolation in `SpotifyWebAPI`'s NWListener callbacks); debug
-  and release builds clean.
+- **2026-08-20** — Core-functionality rework (decisions 012–018): click-fallthrough
+  fix via live-geometry hit region; Dynamic-Island pill + content-sized panel;
+  boringNotch/HIG motion and control polish; event-driven Spotify (1s poll
+  removed); real audio-reactive visualizer (Core Audio process tap, verified
+  live, silent fallback); CPU+memory usage sparklines; `scripts/make-app.sh`
+  bundle packaging. Idle CPU 3–7% → ~0.3%. Research inputs: boringNotch source
+  dive, Apple HIG fetch, live tap probe, Notchy/iStat + Mach-API research.
+- **2026-08-19** — Pin bug fixed (011 addendum); hover-scale on all interactive
+  controls.
+- **2026-08-19** — Interaction model reworked (decision 011, revising 009).
+- **2026-08-19** — Hover-grow strip (009) + Liquid Glass expanded panel (010).
+- **2026-08-19** — v1 features implemented (music service, visualizer,
+  add-to-playlist, agent lights); debug and release builds clean.
 - **2026-08-19** — Scaffold: SwiftPM app shell, notch NSPanel with `hitTest`
   passthrough (decision 008), stubbed services, smoke-tested.
 - **2026-08-19** — Project bootstrapped: docs carried over from AgentStatus and

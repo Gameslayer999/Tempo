@@ -3,6 +3,12 @@
 *.xcodeproj
 .swiftpm/
 
+# Build artifacts (app bundle packaging — scripts/make-app.sh)
+dist/
+
+# Claude Code session state (agent worktrees etc.) — never source
+.claude/
+
 # Local runtime state & credentials — never source (Agent Guideline #12)
 *.log
 logs/

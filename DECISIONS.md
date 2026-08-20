@@ -12,16 +12,23 @@
 | # | Date | Decision | Status |
 |---|------|----------|--------|
 | 001 | 2026-08-19 | Stack: native SwiftUI/AppKit built with SwiftPM (`swift build`), no Xcode project, no Tauri | Accepted |
-| 002 | 2026-08-19 | Music signal & transport: AppleScript to the Spotify desktop app (not the private MediaRemote framework) | Accepted |
+| 002 | 2026-08-19 | Music signal & transport: AppleScript to the Spotify desktop app (not the private MediaRemote framework) | Amended by 015 |
 | 003 | 2026-08-19 | Add-to-playlist: Spotify Web API with OAuth 2.0 PKCE, user-supplied Client ID, loopback redirect | Accepted |
-| 004 | 2026-08-19 | Visualizer v1: playback-synced animated bars (no system-audio capture) | Accepted |
+| 004 | 2026-08-19 | Visualizer v1: playback-synced animated bars (no system-audio capture) | Superseded by 016 (kept as fallback) |
 | 005 | 2026-08-19 | AgentStatus integration: read-only consumer of AgentStatus's existing status files; Tempo installs no hooks | Accepted |
-| 006 | 2026-08-19 | Window: non-activating borderless NSPanel hugging the physical notch; click toggles collapsed/expanded | Accepted |
+| 006 | 2026-08-19 | Window: non-activating borderless NSPanel hugging the physical notch; click toggles collapsed/expanded | Amended by 013 |
 | 007 | 2026-08-19 | Repository: private GitHub repo `Gameslayer999/Tempo`; v1 scope is Spotify-only | Accepted |
-| 008 | 2026-08-19 | Panel sizing: one static NSPanel at expanded size; SwiftUI animates content; custom `hitTest` passthrough outside the drawn shape | Accepted |
+| 008 | 2026-08-19 | Panel sizing: one static NSPanel at expanded size; SwiftUI animates content; custom `hitTest` passthrough outside the drawn shape | Amended by 012 |
 | 009 | 2026-08-19 | Hover-grow: strip expands ~10×4pt on hover (boringNotch-style spring); passthrough rect is always the hover-grown size so flicker is structurally impossible | Revised by 011 |
 | 010 | 2026-08-19 | Liquid Glass: expanded panel uses macOS 26 `glassEffect` (`.ultraThinMaterial` fallback) with a black-to-glass top gradient; collapsed strip stays pure black | Accepted |
-| 011 | 2026-08-19 | Interaction model: hover fully expands (transient) with a haptic tick; click pins; click outside unpins — revises 009 | Accepted |
+| 011 | 2026-08-19 | Interaction model: hover fully expands (transient) with a haptic tick; click pins; click outside unpins — revises 009 | Amended by 014 |
+| 012 | 2026-08-20 | Click-fallthrough fix: hit region tracks the live animating shape geometry, not the expanded/collapsed flag — amends 008 | Accepted |
+| 013 | 2026-08-20 | Geometry: Dynamic-Island collapsed pill (notch + content-fit wings, concave-top NotchShape); expanded panel is content-sized — amends 006 | Accepted |
+| 014 | 2026-08-20 | Motion & control polish: boringNotch spring constants, 0.25s hover dwell, Reduce Motion fades, HIG 28pt targets + press states, semantic colors — amends 011 | Accepted |
+| 015 | 2026-08-20 | Spotify signal delivery: event-driven via `PlaybackStateChanged` distributed notification; 1s AppleScript poll removed — amends 002 | Accepted |
+| 016 | 2026-08-20 | Real audio-reactive visualizer: Core Audio per-process tap on Spotify + 5-band vDSP FFT; 004's animation kept as silent fallback — supersedes 004 | Accepted |
+| 017 | 2026-08-20 | System usage graph: CPU + memory sparklines (Notchy/iStat style) in the expanded panel; Path-based, never Canvas | Accepted |
+| 018 | 2026-08-20 | Packaging: `scripts/make-app.sh` assembles a signed `dist/Tempo.app`; required for the audio-capture permission | Accepted |
 
 ---
 
@@ -306,3 +313,218 @@ descendant-priority rule. Also noted for future UI debugging: this dev shell has
 Accessibility (synthetic clicks work) but not Screen Recording (no screenshots), and
 raw CGEventPost against this non-activating overlay window class is unreliable —
 post-fix behavior was verified structurally.
+
+**Addendum (2026-08-20).** Hover timing and dwell amended by 014.
+
+---
+
+## 012 — Click-fallthrough fix: hit region tracks live geometry (amends 008)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** The user's top bug: hover the notch, panel expands, click pause — the
+click sometimes lands on the window *behind* the panel. Root cause found in 008's
+`hitTest`: it keyed off the discrete `displayedExpanded` boolean. On hover-out the
+boolean flips instantly while the panel is still visually expanded mid-spring
+(0.35–0.45s), so the hit region snapped to the collapsed strip and a click on a
+still-visible control fell through the transparent window to the app behind.
+
+**Options considered.**
+- **Delete the custom `hitTest`, rely on stock `NSHostingView`** (what boringNotch
+  does — verified at source: they have zero hitTest overrides). *Rejected by
+  measurement:* on this machine (macOS 26.6, Swift 6.3), `NSHostingView.hitTest`
+  returns `self` for **every** point in its bounds — even with
+  `.allowsHitTesting(false)` on the root view — so a stock view would swallow every
+  click in the transparent 405×280 window (worse Guideline #3 violation).
+- **Track the live animated geometry.** `NotchShape.path(in:)` is called by SwiftUI
+  once per animation frame with the interpolated rect (measured ~298 calls per
+  0.45s spring, both directions). The always-present silhouette layer reports that
+  rect to a lock-guarded `NotchHitRegion`; `hitTest` reads it.
+
+**Choice.** Live geometry. Regions: *displayed-expanded* → the expanded panel's
+target rect (jumps to full size instantly so a pointer travelling pill→controls
+can't outrun the spring and cancel the expansion); *collapsing* → the live shrinking
+shape (the fix: a click on a still-visible control is caught at every animation
+step); *settled collapsed* → exactly the pill. Verified by driving the compiled real
+sources through `hitTest` directly: mid-collapse control clicks captured at every
+sampled height (182→107pt), passthrough beside/below the pill intact. Also from the
+boringNotch dive: `canBecomeKey`/`canBecomeMain` overridden to false,
+`isFloatingPanel`, `.ignoresCycle`, `darkAqua` appearance; `acceptsFirstMouse` is
+NOT needed (boringNotch ships without it; clicks on SwiftUI buttons in a
+non-activating panel work as first clicks).
+
+**Constraint discovered (load-bearing).** A view inserted by an `if` branch does
+not join an in-flight animation — it is evaluated once, at final size. The
+reporting silhouette must therefore live *outside* every branch, or the hit region
+would report nothing exactly when it matters (during collapse).
+
+---
+
+## 013 — Dynamic-Island pill + content-sized panel (amends 006)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** The collapsed strip spanned `notchWidth + 220pt` — far wider than its
+content; the user wants an iOS-Dynamic-Island-style pill "wide enough to hold the
+song cover and the audio visualizer, but no wider than needed". Separately, the
+expanded panel's fixed 190pt height overflowed once agent lights (and the new usage
+graph) were present, and would show dead glass when sections hide.
+
+**Choice.**
+- **Pill:** width = `notchWidth + 2×wingWidth`; each wing holds one
+  `(stripHeight−10)pt` square (artwork left, visualizer right) plus 6pt padding —
+  on this machine 185+2×35 = **255pt** (was 405). Height = physical notch height.
+- **Shape:** a custom `NotchShape` — top corners *concave* (flare out and tuck
+  under the menu-bar edge), bottom corners convex; radii animate. Constants adopted
+  from boringNotch's tuned values: collapsed top 6 / bottom 14, expanded top 19 /
+  bottom 24. Written from the geometric spec, not copied source (GPL).
+- **Content-sized expanded panel:** the window is a fixed 280pt-tall ceiling
+  (008's never-resize principle stands); the drawn panel measures its actual
+  content (sections hide/show: playlist unconfigured, no agent sessions) via a
+  GeometryReader report into an explicit — therefore spring-animatable — container
+  height, which also feeds the hit region's expanded target (012). No dead glass,
+  no overflow, and the window band below a short panel stays click-through.
+
+---
+
+## 014 — Motion & control polish: boringNotch constants + HIG (amends 011)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** The user asked for category-leader polish ("look at Notchy and
+boringNotch") and macOS-native feel (Apple HIG). Sourced from the boringNotch
+code dive and a fetch of the actual HIG pages (Materials, Motion, Accessibility,
+Buttons, Typography, Windows, Popovers, Charts).
+
+**Choice.**
+- **Hover dwell 0.25s** before expanding (boringNotch defaults 0.3s): a pointer
+  merely crossing the notch never flickers the panel open. Haptic tick moved to
+  when the expansion actually fires. Hover-out debounce 0.1s (boringNotch's value).
+- **Springs:** open `.spring(response 0.42, damping 0.8)` (slight overshoot);
+  close `.spring(response 0.45, damping 1.0)` — critically damped, no bounce into
+  the notch. Both are boringNotch's shipped constants; HIG publishes no numeric
+  spring guidance (verified — don't cite one as Apple's).
+- **Reduce Motion** (`accessibilityReduceMotion`): both springs replaced by a
+  0.15s ease + opacity transition — HIG explicitly says replace movement and
+  blur transitions with fades.
+- **Controls:** ≥28×28pt hit targets (HIG's macOS control size; the 44pt figure is
+  iOS), `NotchButtonStyle` with hover capsule highlight AND a pressed state (HIG:
+  "without a press state, a button can feel unresponsive") — replaces the
+  hover-scale-only modifier. Semantic `.primary`/`.secondary` instead of hardcoded
+  grays/white-opacities (vibrancy-aware on glass).
+
+---
+
+## 015 — Event-driven Spotify signal (amends 002)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** 002's 1s AppleScript poll = ~3600 Apple-event round trips/hour
+forever, a large share of Tempo's steady-state CPU. boringNotch has no music
+polling at all: Spotify posts a `com.spotify.client.PlaybackStateChanged`
+distributed notification on every play/pause/track change.
+
+**Verified live on this machine (Guideline #4).** The notification fires
+instantly; userInfo carries `Player State` (**title-case** "Playing"/"Paused" —
+unlike AppleScript's lowercase), `Track ID` (full `spotify:track:` URI), `Name`,
+`Artist`, `Album`, `Duration`, `Playback Position`, etc. **No artwork URL** —
+confirmed absent, so AppleScript remains the only artwork path.
+
+**Choice.** Subscribe to the notification; same-track events update state with
+zero AppleScript; a track-identity change triggers ONE AppleScript fetch (artwork).
+One fetch at startup and on Spotify launch (NSWorkspace observers); state cleared
+immediately on Spotify termination. A 30s reconciliation poll runs only while
+Spotify is running, as insurance against a dropped notification. Steady-state:
+1s-interval polling → 2 cheap calls/min, and instant (not up-to-1s-late) UI
+updates. AppleScript remains the transport-command and artwork mechanism (002's
+core choice stands).
+
+---
+
+## 016 — Real audio-reactive visualizer: Core Audio process tap (supersedes 004)
+
+**Date:** 2026-08-20 · **Status:** Accepted (user-requested)
+
+**Context.** The user asked to "make the audio visualizer for real this time."
+004's playback-synced animation becomes the fallback.
+
+**Verified live on this machine (Guideline #4), full probe first.**
+- Per-process tap on Spotify works: PID → process object → `CATapDescription`
+  (stereo mixdown, private, **`muteBehavior = .unmuted`** — `.mutedWhenTapped`
+  would silence Spotify for the user) → process tap → private aggregate device
+  (drift-compensated tap list) → IOProc. Delivered format: 48kHz float32
+  interleaved stereo, 512 frames/callback at 93.75Hz, pre-device-volume.
+- **TCC trap:** every call returns `noErr` even when unauthorized — denial is
+  *silent all-zero buffers*. Authorization is only ever granted to a signed
+  `.app` bundle (grant lives under Privacy & Security → Screen & System Audio
+  Recording); a bare `.build/release/tempo` always gets silence. Embedded-plist
+  CLI workarounds do not work for `kTCCServiceAudioCapture`.
+- Cost: 512-pt vDSP FFT + 5 band means ≈ 1µs/callback (~0.01% core); probe
+  process 0.0–0.1% CPU.
+
+**Choice.** `AudioTapService`: tap exists only while Spotify runs (NSWorkspace +
+HAL process-object-list observers; Spotify's audio object appears only after it
+first touches the HAL); full rebuild on default-output-device change (the
+aggregate pins the output UID); teardown order Stop → DestroyIOProc →
+DestroyAggregate → DestroyTap. IO thread computes 5 log-scaled band levels
+(Hz edges 93.75/187.5/468.75/1218.75/4031.25/Nyquist, per-band gain calibrated
+against live Spotify); a 30Hz main-thread pump applies asymmetric smoothing
+(attack 0.5 / release 0.10) and publishes. Bass renders in the center capsule,
+frequency rising outward. **Silent-denial detection:** ~2s of exact zeros while
+Spotify's process object reports output running → `isCapturing=false` →
+`VisualizerView` uses 004's animation (which now also caps at 30Hz and fully
+pauses its TimelineView when settled — the old always-on display-refresh redraw
+was the main CPU leak). Zero redraws and zero timers at rest in both modes.
+Levels are derived and discarded; no samples are ever stored (Guideline #5).
+Verified end-to-end: the production service, compiled into a signed harness app,
+captured real music (bands separating naturally); the unbundled binary correctly
+detected denial and fell back. macOS <14.2 lacks the tap API → fallback via
+`#available`.
+
+---
+
+## 017 — System usage graph: CPU + memory sparklines
+
+**Date:** 2026-08-20 · **Status:** Accepted (user-requested)
+
+**Context.** The user likes Notchy's usage view. Research: Notchy self-describes
+it as an "iStat-style flyout" (CPU/memory/network); no screenshot of Notchy's own
+rendering was findable, so the visual language was taken from iStat Menus itself —
+scrolling history graphs, bold numerals, no axis chrome.
+
+**Choice.** `SystemStatsService` (1Hz): CPU from `HOST_CPU_LOAD_INFO` tick deltas
+(aggregate, unprivileged, sub-ms); memory from `HOST_VM_INFO64` — used =
+`(active + wired + compressor) × host_page_size()` (16KB pages on Apple Silicon —
+never hardcode 4096) over physical memory, matching Activity Monitor's
+convention (verified against `vm_stat` to the exact page count; `top`'s higher
+figure additionally counts inactive pages — explained, not a bug). 60-sample ring
+buffers; sampling starts at launch so history exists on first expand.
+`UsageGraphView`: headerless 24pt row, two cells (CPU | MEM) — SF Symbol +
+monospaced-digit percentage + 80×22pt area sparkline on a **fixed 0–100 scale**
+(HIG: fixed range when bounds are meaningful), newest at right, `.secondary`
+color, value tinted red only >80%, "--" until a real sample exists (never a fake
+0), accessibility labels per cell. **Path/Shape rendering only — never SwiftUI
+`Canvas`**: the first Canvas in a process pays a one-time ~93MB Metal allocation;
+nothing in Tempo uses Canvas and nothing may start to. Swift Charts likewise
+rejected (built on Canvas, heavy for a fixed sparkline).
+
+---
+
+## 018 — Packaging: signed `dist/Tempo.app` via `scripts/make-app.sh`
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+**Context.** Queued since 008 for login-item/TCC identity; became mandatory when
+016 proved audio capture is only ever authorized for a signed bundle.
+
+**Choice.** One idempotent script: `swift build -c release` (with build-lock
+retry), fresh `dist/Tempo.app` assembly, Info.plist from an in-script heredoc
+(single source of truth): `com.gameslayer999.tempo`, `LSUIElement`,
+`NSAppleEventsUsageDescription`, `NSAudioCaptureUsageDescription`; codesign with
+an Apple Development identity if present, else ad-hoc with a stable identifier;
+`codesign --verify` + `plutil -lint` gates. `dist/` gitignored. **Caveat:** with
+ad-hoc signing, TCC grants may not survive rebuilds (in practice the audio grant
+survived one ad-hoc re-sign during verification, but it is not guaranteed);
+a self-signed "Tempo" certificate — the pattern AgentStatus already uses on this
+machine — is queued in NEXT_STEPS as the durable fix. Bundled launch is now the
+*primary* run path (the bare binary cannot capture audio, 016).
