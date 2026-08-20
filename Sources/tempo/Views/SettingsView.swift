@@ -106,8 +106,27 @@ private struct GeneralPane: View {
                 LabeledContent("Expand") { Text("Hover the notch") }
                 LabeledContent("Keep open") { Text("Click the panel") }
                 LabeledContent("Close") { Text("Click anywhere outside") }
+
+                LabeledContent("Hover delay") {
+                    HStack(spacing: 10) {
+                        Slider(
+                            value: $prefs.hoverExpandDelayMS,
+                            in: Preferences.minHoverExpandDelayMS...Preferences.maxHoverExpandDelayMS,
+                            step: 10
+                        )
+                        .frame(width: 170)
+                        Text("\(Int(prefs.hoverExpandDelayMS)) ms")
+                            .font(.callout.monospacedDigit())
+                            .foregroundColor(.secondary)
+                            .frame(width: 52, alignment: .trailing)
+                    }
+                }
             } header: {
                 Text("Interaction")
+            } footer: {
+                Text("How long the pointer must rest on the notch before the panel opens. The haptic tick fires at the same moment, so a shorter delay is also more likely to land while your finger is still on the trackpad. Longer keeps a pointer that is only passing over the notch from opening it. 0 opens the instant the pointer arrives.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)

@@ -100,13 +100,30 @@ struct ContentView: View {
     private let panelWidth = NotchGeometry.panelWidth
     private let panelHeight = NotchGeometry.panelHeight
 
-    /// Dwell before expanding, and grace before collapsing. Hover-in is
-    /// delayed so a pointer crossing the notch on its way somewhere else
-    /// cannot flicker the panel open; the pending expansion is cancelled by
-    /// the matching hover-out. Hover-out is debounced so a pointer travelling
-    /// from the pill into the controls doesn't read as "left the panel".
-    private static let hoverExpandDelay: UInt64 = 250_000_000
+    /// Grace before collapsing: debounced so a pointer travelling from the
+    /// pill into the controls doesn't read as "left the panel".
+    ///
+    /// The matching expand dwell is a user setting, not a constant — see
+    /// `hoverExpandDelay` below.
     private static let hoverCollapseDelay: UInt64 = 100_000_000
+
+    /// Dwell before hover expands the panel, from Settings ▸ General ▸
+    /// Interaction (decision 034, amends 011). It exists so a pointer merely
+    /// crossing the notch on its way somewhere else cannot flicker the panel
+    /// open; the pending expansion is cancelled by the matching hover-out.
+    ///
+    /// It is also what the haptic tick waits on, since the tick fires when the
+    /// expansion actually triggers — which is why it is adjustable. At the
+    /// original 250ms the tick usually fired into a trackpad the finger had
+    /// already left. Against the measured pill (271 x 33pt: 185pt notch +
+    /// 43pt wings), a pointer crossing *vertically* — the common accident,
+    /// travelling up to the menu bar and past — is inside for only 13-40ms at
+    /// any normal speed, so even a short dwell filters it; slow *horizontal*
+    /// travel along the menu bar is inside for 180-340ms and was never
+    /// filtered at any of these values.
+    private var hoverExpandDelay: UInt64 {
+        UInt64(max(prefs.hoverExpandDelayMS, 0) * 1_000_000)
+    }
 
     @State private var hoverTask: Task<Void, Never>?
 
@@ -343,7 +360,7 @@ struct ContentView: View {
     private func handleHover(_ hovering: Bool) {
         hoverTask?.cancel()
         hoverTask = Task {
-            try? await Task.sleep(nanoseconds: hovering ? Self.hoverExpandDelay : Self.hoverCollapseDelay)
+            try? await Task.sleep(nanoseconds: hovering ? hoverExpandDelay : Self.hoverCollapseDelay)
             guard !Task.isCancelled else { return }
             if hovering {
                 let wasFullyCollapsed = !state.isExpanded && !state.isHovered

@@ -19,9 +19,9 @@ wider than its content:
   Requires running the bundled app and the one-time audio permission below;
   otherwise the bars fall back to a playback-synced animation.
 
-**Hover to expand** — resting the pointer on the pill for a quarter second opens
-the full panel (with a trackpad haptic tick); a pointer merely crossing the notch
-doesn't. Moving the mouse away collapses it. **Clicking anywhere on the open
+**Hover to expand** — resting the pointer on the pill briefly (60ms by default,
+adjustable in Settings ▸ General) opens the full panel, with a trackpad haptic
+tick at the moment it opens; a pointer merely crossing the notch doesn't. Moving the mouse away collapses it. **Clicking anywhere on the open
 panel pins it** — including the controls, so using the transport buttons or the
 playlist picker keeps it open; only a click outside unpins and collapses it. Honors the system Reduce Motion
 setting (fades instead of springs).
@@ -66,7 +66,12 @@ no Dock icon, so the gear is the only way in.
   three glass options fall back to the nearest system material. Also *Open Tempo
   at login* (works from `dist/Tempo.app` only; a bare `swift build` binary has
   no bundle to register, and the toggle says so), plus a reminder of the hover /
-  click / click-outside interaction model.
+  click / click-outside interaction model and a *Hover delay* slider —
+  0–400ms, 60ms by default — setting how long the pointer must rest on the
+  notch before the panel opens. The haptic tick fires at that same moment, so a
+  shorter delay is also more likely to land while your finger is still on the
+  trackpad; a longer one keeps a pointer that is only passing over the notch
+  from opening it, and 0 opens the instant the pointer arrives.
 - **Music** — a searchable list of your playlists: tick the ones you add songs
   to most and only those appear in the notch picker (tick none and all are
   offered). Plus connection status, Connect / Disconnect, and a guided three-step

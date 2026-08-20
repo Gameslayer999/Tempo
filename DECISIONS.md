@@ -44,6 +44,7 @@
 | 031 | 2026-08-20 | Paint a 5% substrate under the expanded panel's glass: macOS routes clicks on a non-opaque window by backing-store alpha, and Liquid Glass paints none — amends 010 | Accepted |
 | 032 | 2026-08-20 | Pin-on-click moves to `NotchPanel.sendEvent` so clicks on controls also pin the panel; only an outside click closes it — amends 011 | Accepted |
 | 033 | 2026-08-20 | The outside-click monitor must ignore clicks that land on the panel: a non-activating app's own clicks reach its global monitor — completes 032 | Accepted |
+| 034 | 2026-08-20 | Hover-expand dwell becomes a setting (0–400ms, default 60ms) so the haptic tick lands while the finger is still on the trackpad; pattern/threading/background-actuation ruled out by measurement — amends 011 | Accepted |
 
 ---
 
@@ -1396,3 +1397,86 @@ Two rounds of plausible reasoning about this (a local monitor's `event.window`,
 then `sendEvent`) each fixed something real and neither fixed the reported
 symptom, because the actual culprit was a third path nobody had instrumented.
 Logging every path that can mutate the state found it in one run.
+
+---
+
+## 034 — The hover-expand dwell is a setting, not a constant (amends 011)
+
+**Date:** 2026-08-20 · **Status:** Accepted
+
+### Symptom
+
+The haptic tick on expansion was felt only occasionally — "sometimes I feel it
+but most times I cannot."
+
+### What was ruled out first
+
+Three plausible causes, each eliminated against this machine rather than
+assumed (Agent Guideline #4):
+
+- **Hardware/settings.** Mac14,15 (M2 Air) has a Force Touch trackpad;
+  `ActuateDetents = 1` and `ForceSuppressed = 0`, so haptics are enabled.
+- **Pattern too weak.** `.alignment` is the subtlest of the three feedback
+  patterns, so a harness fired `.generic`, `.alignment` and `.levelChange`
+  three times each for comparison. The user reported all three feel the same —
+  so the pattern is not the variable, and swapping it would have been a
+  no-op fix.
+- **Actuation from a non-frontmost app.** The notch panel is deliberately
+  non-activating (decision 006), so Tempo is never the active app. The same
+  harness runs as a non-frontmost process and its ticks *were* felt, so
+  background actuation works.
+- **Wrong thread.** A `Task` in `handleHover` performs the tick, and AppKit
+  haptics off the main thread would be unreliable. A forced recompile under
+  `-strict-concurrency=complete` produced zero warnings, so the closure is
+  MainActor-isolated and the tick is already on the main thread.
+
+### Root cause
+
+Timing, as the user diagnosed. The tick fires when the expansion actually
+triggers, which is `hoverExpandDelay` after the pointer arrives. At 250ms it
+was firing into a trackpad the finger had usually already left.
+
+### The geometry that sizes the trade-off
+
+The dwell exists to stop a pointer merely crossing the notch from flickering
+the panel open. Measured against the real pill on this machine — 271 x 33pt
+(185pt notch + 43pt wings), top-centre of a 1710pt screen:
+
+| Crossing | Time inside the pill | Filtered by |
+|---|---|---|
+| Vertical (up to the menu bar and past) — the common accident | 13–40ms at any normal speed | any dwell >= ~50ms |
+| Fast horizontal flick along the top band | ~108ms at 2500pt/s | 120ms, not 60ms |
+| Slow horizontal travel along the menu bar | 180–340ms at 800–1500pt/s | **none of these values, 250ms included** |
+
+The last row is the important one: the dwell never protected against the case
+it looks like it protects against. So the range between 0 and ~120ms costs far
+less than the original 250ms implied.
+
+### Options considered
+
+| Option | Pros | Cons |
+|---|---|---|
+| Stronger haptic pattern | One-line change | Ruled out by measurement — all three patterns feel identical here |
+| Fire the tick at hover-in instead of at expansion | Always lands while the finger is down | The tick would no longer mean "it opened" — a lying signal (UI Principle #4) |
+| Pick a shorter constant | Simplest | The right value is a matter of feel, and one number cannot be argued to be right |
+| **A setting (chosen)** | The user lands on their own number; the trade-off is stated in the UI | One more preference to maintain |
+
+### Decision
+
+`hoverExpandDelayMS` in `Preferences` (UserDefaults), 0–400ms in 10ms steps,
+default **60ms**, exposed as a slider in Settings ▸ General ▸ Interaction.
+`ContentView.hoverExpandDelay` became a computed property reading it, so a
+change applies on the next hover with no restart. Clamped on read as well as
+write: a hand-edited defaults value outside the range would otherwise make the
+notch unopenable.
+
+The collapse grace (100ms) stays a constant — it is not on the haptic path and
+nothing was reported about it.
+
+### Consequences
+
+- The stated default drops from 250ms to 60ms, so the panel opens noticeably
+  sooner out of the box. Per the table, the only protection given up is against
+  a fast horizontal flick along the top 33pt band.
+- 0 is a legitimate setting (open on arrival), which makes the tick land
+  inside the trackpad contact the user's own pointer move just made.

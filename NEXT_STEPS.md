@@ -135,6 +135,24 @@
 
 ## Recently completed
 
+- **2026-08-20** — Hover-expand dwell is now a setting (decision 034): Settings
+  ▸ General ▸ Interaction has a *Hover delay* slider, 0–400ms in 10ms steps,
+  default 60ms (was a fixed 250ms), applied on the next hover with no restart.
+  Fixes an intermittently-felt haptic tick — the tick fires when the expansion
+  triggers, so at 250ms it usually fired into a trackpad the finger had already
+  left. Pattern strength, background actuation and main-thread isolation were
+  each measured and ruled out first. **Awaiting the user's final number** — the
+  shipped default should be set to whatever they land on.
+
+- **2026-08-20** — CPU and memory sparklines now fill the expanded panel's full
+  content width (each roughly 2.5x the old fixed 80pt), with the row height
+  unchanged at 22/24pt so the panel does not grow.
+
+- **2026-08-20** — `DECISIONS.md` numbering repaired: two same-day sessions had
+  each written a 029 and a 030. The click-handling pair became 032/033, section
+  031 moved ahead of them so the body reads in order, the index was sorted, and
+  the missing 024 index row was added. Index and sections now match one-to-one.
+
 - **2026-08-20** — Playlist picker hover highlight (decision 028 addenda 3–4):
   shared highlight constants on `NotchButtonStyle` plus an outline on hover, and
   the decoration moved out of the `Menu`'s `label:` onto the `Menu` itself,

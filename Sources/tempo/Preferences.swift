@@ -20,6 +20,7 @@ final class Preferences: ObservableObject {
         static let showAgentLights = "showAgentLights"
         static let favoritePlaylists = "favoritePlaylists"
         static let panelStyle = "panelStyle"
+        static let hoverExpandDelayMS = "hoverExpandDelayMS"
     }
 
     private let defaults: UserDefaults
@@ -39,6 +40,16 @@ final class Preferences: ObservableObject {
     /// rather than failing to decode.
     @Published var panelStyle: PanelStyle {
         didSet { defaults.set(panelStyle.rawValue, forKey: Key.panelStyle) }
+    }
+
+    /// Dwell, in milliseconds, before hovering the collapsed pill expands the
+    /// panel — and therefore before the haptic tick, which fires when the
+    /// expansion actually triggers. Exposed as a setting because the right
+    /// value is a matter of feel: too long and the tick fires into a trackpad
+    /// the finger has already left, too short and a pointer crossing the notch
+    /// flickers the panel open (decision 034, amends 011).
+    @Published var hoverExpandDelayMS: Double {
+        didSet { defaults.set(hoverExpandDelayMS, forKey: Key.hoverExpandDelayMS) }
     }
 
     /// Playlists to offer in the notch picker, chosen in Settings ▸ Music.
@@ -67,18 +78,27 @@ final class Preferences: ObservableObject {
     /// never crash).
     let isBundled = Bundle.main.bundleIdentifier != nil
 
+    static let defaultHoverExpandDelayMS: Double = 60
+    static let minHoverExpandDelayMS: Double = 0
+    static let maxHoverExpandDelayMS: Double = 400
+
     private init() {
         let defaults = UserDefaults.standard
         defaults.register(defaults: [
             Key.showVisualizer: true,
             Key.showUsageGraph: true,
             Key.showAgentLights: true,
+            Key.hoverExpandDelayMS: Self.defaultHoverExpandDelayMS,
         ])
         self.defaults = defaults
         showVisualizer = defaults.bool(forKey: Key.showVisualizer)
         showUsageGraph = defaults.bool(forKey: Key.showUsageGraph)
         showAgentLights = defaults.bool(forKey: Key.showAgentLights)
         panelStyle = PanelStyle(rawValue: defaults.string(forKey: Key.panelStyle) ?? "") ?? .regular
+        // Clamped on read, not just on write: a hand-edited defaults value
+        // outside the slider's range would otherwise make the notch unusable.
+        hoverExpandDelayMS = min(max(defaults.double(forKey: Key.hoverExpandDelayMS), Self.minHoverExpandDelayMS),
+                                 Self.maxHoverExpandDelayMS)
         favoritePlaylistIDs = defaults.stringArray(forKey: Key.favoritePlaylists) ?? []
         refreshLaunchAtLogin()
     }
