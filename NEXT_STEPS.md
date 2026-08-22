@@ -52,12 +52,77 @@
   key (`activate(ignoringOtherApps: true)` is required for that — plain
   `activate()` leaves it visible but not key, and the Client ID field would
   take no keystrokes).
+- **Click-to-focus landed (2026-08-20), decision 035.** The agent lights are now
+  buttons: a click routes on the status file's `ide` field and goes to that
+  session's host — the Ghostty/Terminal tab running it, the VS Code/Cursor window
+  holding its workspace, or Claude Desktop — then collapses the panel. Ported
+  from AgentStatus's `focus_session` (macOS paths only), **without** its two
+  side-effecting parts: Tempo never writes the `~/.claude/status/focus-request.json`
+  relay (Agent Guideline #3, so VS Code is window-precise, not tab-precise) and
+  never runs `claude attach` to open a background agent. Every step runs off the
+  main actor. Verified live on this machine: the ancestry walk finds Ghostty 4
+  generations above `claude`, the session's `ai-title` matches exactly 1 of 3
+  open surfaces, and a compiled probe brought Ghostty forward from a
+  Finder-frontmost desktop — including for a session with no title, which falls
+  back to fronting the owning terminal process. `NotchButtonStyle` gained the
+  hover outline it previously only lent to the playlist picker, so transport,
+  gear and lights now highlight identically.
+- **Agent rows show what each session is working on (2026-08-22, decision
+  040).** The lights are no longer a horizontal pill strip: each session is a
+  full-width row — dot, folder label, and a one-line excerpt of the session's
+  current prompt (`task`) — stacked vertically, three visible before the list
+  scrolls. Two sessions in one repo are now distinguishable, which decision
+  035's click-to-focus needed. `task` is rendered and nowhere else: flattened
+  to one line, capped at 120 chars, never logged or stored.
+- **Scrubbable progress bar landed (2026-08-22, decision 041).** The expanded
+  panel has a full-width progress row under the cover and controls: elapsed
+  time, a draggable bar, time remaining. Dragging the knob or clicking the bar
+  seeks Spotify (on release). Position is an extrapolated *anchor* rather than
+  a published ticking value, so a playing track costs 4 redraws/sec of one
+  subtree and no state publishes, and a paused one installs no timer — the
+  collapsed pill's zero-timer rest state is unchanged. Reconciled against
+  Spotify at 1Hz **only while the panel is open** (a seek inside Spotify posts
+  no notification, so nothing else would notice it). Verified live end to end;
+  see the decision for the `set player position` race it uncovered.
 - **Not yet verified by a human:** pill/panel look and feel, hover dwell feel,
   click-to-pause reliability in real use, the reactive visualizer visually, the
-  usage graph rendering, agent-light legibility on glass, OAuth flow (still no
-  Client ID configured).
+  usage graph rendering, agent-row legibility on glass **and the new row layout
+  with more than one session open** (only one session existed on this machine
+  while it was built), OAuth flow (still no Client ID configured).
 
 ## Now
+
+- [ ] **Look at the collapsed agent light (decision 042)** — with a session
+      running, the pill should carry a green dot to the right of the bars and
+      stay centred on the physical notch. Check: the dot survives the media
+      retraction (pause Spotify, wait 60s — the wings go, the dot stays); a
+      session going blocked turns it orange and pulses; ending a session flashes
+      pulsing white for 20s then settles; the pill springs rather than snaps
+      when the dot appears or disappears; and switching Settings ▸ Modules ▸
+      Agent light to "One dot per session" and "Off" both re-lay-out cleanly.
+
+- [ ] **Watch the media-idle transition once (decision 038)** — with music
+      playing, pause Spotify and leave it: after 60s the wings must retract on
+      the spring and leave exactly the notch, and hovering that bare notch must
+      still open the panel (usage graphs + agent lights, no now-playing header).
+      Press play: cover, bars and controls must come straight back. Also check a
+      click just beside the notch reaches the app behind once the wings are gone.
+
+- [ ] **Try the progress bar (decision 041)** — with music playing, open the
+      panel: the bar must advance smoothly and the times must count up/down.
+      Drag the knob and let go — playback should land there and the bar must
+      *stay* there, not snap back. Click somewhere on the bar (no drag) — it
+      should jump there too. Then scrub inside Spotify's own window with
+      Tempo's panel pinned open: the bar must catch up within a second. Check
+      a track over an hour long (podcast/DJ set) shows `h:mm:ss` uncropped.
+
+- [ ] **Verify the multi-display fix** (decision 037) — with Tempo running:
+      open the lid while docked (pill must jump to the built-in notch at its
+      real notch width), shut it again (pill must re-centre on the external as
+      the 200×32 fallback strip), unplug and replug the monitor, and drag the
+      displays around in System Settings ▸ Displays. In each case the pill must
+      land on the current notch within a second, and hover/click must still work
+      there — the hit region moves with it.
 
 - [ ] **User verification pass** — run `scripts/make-app.sh`, `open dist/Tempo.app`,
       approve the two permission prompts (Automation → Spotify, System Audio
@@ -90,6 +155,15 @@
 - [ ] **Self-signed "Tempo" certificate** for stable TCC identity across rebuilds
       (AgentStatus already uses this pattern on this machine — port it, script
       it). Until then rebuilds may re-prompt for Automation/audio.
+- [ ] **Verify click-to-focus for the editor hosts** (decision 035) — the VS Code
+      and Cursor routes are the only ones untested: both apps are installed but
+      neither was running a Claude session, and `~/.claude/ide` held no lock
+      files, so `workspaceRoot` fell back to `cwd` unexercised. Open a session in
+      each, click its light, and confirm it lands in the right window (and that
+      Cursor is not handed a new agent).
+- [ ] **Grant Tempo Accessibility** (System Settings ▸ Privacy & Security ▸
+      Accessibility) and re-check a click on a light for a window on another
+      Space or full-screen — that raise is the one step the permission gates.
 - [ ] **Verify the OAuth flow live** — create the Spotify Developer app (README),
       add the Client ID, Connect Spotify, add a song to a playlist.
 
@@ -134,6 +208,137 @@
   (c) accept it and document. Awaiting the user's call. -->
 
 ## Recently completed
+
+- **2026-08-22** — **White unread light in the expanded panel (decision 044).**
+  The panel's rows drew the same grey dot for a session that had just finished a
+  turn and one idle since breakfast; only the collapsed pill said anything, and
+  only for 20 seconds. Rows now show a **steady white** light for a finished turn
+  nobody has looked at, cleared by the click that already goes to the session
+  (keyed to that finish, so the next one re-lights it). The signal is the status
+  file's own `detail` — `Stop` writes the wrap-up message, `SessionStart` forces
+  it empty, so *idle + non-empty detail* is a durable, restart-proof "there is
+  output to review". Only its **emptiness** is read; the message is never decoded
+  (Agent Guideline #5). An interrupted turn (decision 043) is explicitly not
+  unread — its `detail` is the cancelled tool call, not a wrap-up. The collapsed
+  pill keeps 042's transient dot on purpose: persistent-until-clicked in a list
+  you read, transient in a pill you glance at. Covered by
+  `scripts/test-agent-lights.sh` (24 checks) and confirmed live.
+
+- **2026-08-22** — **Lights reconcile against Claude Code's own view
+  (decision 043).** Reported live: a session interrupted mid-turn went grey on
+  AgentStatus's lightbar and stayed green in Tempo. Root cause: AgentStatus's
+  status files record hook *events*, and the hook's only route to `idle` is a
+  `Stop` event — so an interrupted turn leaves `"state":"running"` on disk
+  forever. AgentStatus corrects this in its own backend (its decisions 067 /
+  063 / 084) **in memory**, never writing it back, so Tempo — reading the raw
+  file — never saw it. `AgentStatusService` now reads two more sources,
+  read-only: `~/.claude/sessions/<pid>.json` (an interrupted turn greys its
+  light) and `claude agents --json` (a background job's light reads green while
+  it works, orange while it waits on an answer). Guards ported intact: positive
+  evidence only, the answer must be from a strictly later second than the hook
+  event, background jobs excluded from the grey. A reconciled grey does not
+  raise decision 042's "just finished" dot — an interrupted turn produced no
+  output to review. The `claude agents --json` subprocess (~0.3s CPU/call) is
+  gated on a CLI session whose own record does not say `"kind":"interactive"`,
+  so a machine running only interactive sessions never spawns it: 12s of
+  polling measured 0.02s CPU with no spawn. Verified by
+  `scripts/test-agent-lights.sh` — 15 checks against the shipped service
+  file with only its directories redirected — plus live schema confirmation on
+  Claude Code 2.1.239/2.1.240.
+
+  **Known gaps left open** (not required by the reported symptom, both logged
+  in decision 043): Tempo does not port AgentStatus's *prune* rules (dead pid,
+  closed IDE window, gone `cwd`, quit Cursor) — those delete the status file,
+  so Tempo inherits them while AgentStatus is running, and falls back to its own
+  2-hour staleness drop when it is not. Tempo also does not port AgentStatus's
+  Cursor reconciliation (#048/#052), so a Cursor subagent still draws a light of
+  its own instead of folding into its parent's row.
+
+- **2026-08-22** — **Agent light in the collapsed pill (decision 042).** The
+  agent signal no longer requires expanding the notch. A slot outboard of the
+  visualizer holds either a summary dot (default) or up to three per-session
+  dots, chosen in Settings ▸ Modules ▸ Agent light; the slot is mirrored by an
+  empty one on the leading side so the notch gap stays registered to the
+  hardware notch. Adds a derived **just finished** state — `AgentStatusService`
+  now remembers each session's previous state across polls and flags a
+  `running -> idle` transition for 20s as a pulsing white dot, since AgentStatus
+  itself writes nothing that distinguishes "done" from "idle for an hour". The
+  light deliberately survives the decision-038 media retraction. Builds clean;
+  verified against the two live session files on this machine (one idle, one
+  running). **Unverified visually** — see "Now".
+
+- **2026-08-22** — **Progress bar with seek (decision 041).** Full-width
+  scrubber in the expanded panel. Verified live against Spotify 1.2.95.453
+  before writing code: `player position` is seconds, `duration` is
+  **milliseconds** (the `.sdef` says seconds and is wrong), `set player
+  position` works, the `PlaybackStateChanged` payload already carries both —
+  and a seek posts **no** notification, which is why reconciliation exists at
+  all. Position is an anchor the view extrapolates from (no per-frame
+  publishes); the 1Hz reconcile runs only while the panel is open. Uncovered
+  and fixed an intermittent bug where `set player position` returns before
+  Spotify's player actually moves, so the immediate read-back undid the seek
+  on screen — now a 0.5s settle window, 8/8 seeks with 0.00s deviation.
+
+- **2026-08-22** — **Agent rows carry a task description (decision 040).**
+  `AgentSession.task` is parsed from the status file's `task` field and
+  rendered beside the folder label; `AgentLightsView` became a vertical
+  scrolling list capped at three visible 28pt rows instead of a horizontal pill
+  strip. Narrows Agent Guideline #5 at the user's explicit request — `task` is
+  displayed only, `detail` stays undecoded, nothing is logged or written.
+  Builds clean; the multi-session layout is unverified visually (one session
+  existed on this machine).
+
+- **2026-08-22** — **Visualizer no longer dances on a muted Mac (decision
+  039).** A `CATapDescription` process tap captures Spotify's stream upstream
+  of the output device's volume and mute, so muting was invisible to it —
+  reproduced with the tap instrumented: `live=1 rawPeak=0.633` on a silent
+  machine. `AudioTapService.outputAudible` (mute + virtual main volume on the
+  default output device, listener-driven, fails open) now gates both reactive
+  mode and the fallback animation, and becoming audible restarts the pump
+  since un-muting creates no silence→sound edge for the audio thread to signal
+  on. Verified live across muted / volume-0 / volume-4 / muted again. Also
+  added `DebugLog.swift`: stderr diagnostics, silent unless `TEMPO_DEBUG_VIZ=1`
+  (`open --env TEMPO_DEBUG_VIZ=1 --stderr <file> dist/Tempo.app`).
+
+- **2026-08-22** — **Media UI hides when nothing has played for a minute
+  (decision 038).** The pill used to carry a grey artwork placeholder and five
+  frozen visualizer bars forever whenever Spotify was paused, quit, or never
+  launched. Now `AppState.isMediaActive` (owned by `MusicService`, one one-shot
+  60s timer armed whenever playback is not playing) gates the cover, the
+  visualizer, the expanded panel's transport row and playlist picker; the
+  collapsed pill shrinks from `pillWidth` to `notchWidth`, so at rest Tempo is
+  exactly the hardware notch. `NotchHitRegion`'s collapsed floor dropped to
+  `notchWidth` to match — left at `pillWidth` the panel would have kept
+  claiming the retracted wings' clicks beside the menu bar. Builds clean;
+  **not yet observed at runtime** (see Now).
+
+- **2026-08-22** — **Panel now follows the displays (decision 037).** Fixes the
+  panel drawing in the wrong place with an external monitor attached.
+  `NotchGeometry` resolved the target screen, notch size, and screen frame into
+  `static let`s evaluated once at first access, and `NotchPanel` computed its
+  window frame from that snapshot inside `init` — nothing observed
+  `NSApplication.didChangeScreenParametersNotification`, so after any display
+  change the window sat at coordinates for a layout that no longer existed (and,
+  since `panelWidth`/`pillWidth` derive from the notch width, potentially at the
+  wrong size). Geometry is now re-read on every screen-parameters notification,
+  the window re-framed, and the SwiftUI content re-laid out via a new
+  `AppState.screenGeneration`; a 750ms settle re-check covers macOS posting the
+  notification before `safeAreaInsets` have caught up on lid-open. Target screen
+  stays the built-in notched display, falling back to the menu-bar display
+  (`screens[0]`, not `NSScreen.main` — Tempo has no key window) with the
+  unchanged 200×32 top-centre strip in clamshell.
+
+- **2026-08-21** — **Lock-screen pill attempted and rejected (decision 036).**
+  Asked for as "show the bar when I'm logged out". Built it — a lock-tracking
+  service plus an above-the-shield window level — and it worked exactly as
+  designed at the window-server level and still could not be seen. Measured:
+  `loginwindow`'s lock-screen windows are at levels 2001/2004, Tempo sat at
+  2147483629 above them and stayed in the on-screen window list the whole time
+  locked, yet a four-level probe (1000 / 2002 / 2005 / 2147483629, opaque
+  full-colour strips) was **invisible at every level**. macOS composites the
+  lock screen in a context that excludes user-session windows, so no window
+  level reaches it. All code reverted; `DECISIONS.md` 036 keeps the measurement
+  so nobody tries it twice.
 
 - **2026-08-20** — Hover-expand dwell is now a setting (decision 034): Settings
   ▸ General ▸ Interaction has a *Hover delay* slider, 0–400ms in 10ms steps,

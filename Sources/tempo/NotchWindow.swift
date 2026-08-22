@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 
 /// Real notch geometry read from `NSScreen`, with a fallback for notchless
-/// displays. Computed once at process start; shared by the panel (window sizing
-/// and positioning) and ContentView (interior layout), so both agree exactly.
+/// displays. Re-read on every display change; shared by the panel (window
+/// sizing and positioning) and ContentView (interior layout), so both agree
+/// exactly.
 enum NotchGeometry {
     static let sidePadding: CGFloat = 110
     /// Window height ceiling. The drawn expanded panel sizes itself to its
@@ -12,27 +13,66 @@ enum NotchGeometry {
     /// the fullest case (all sections visible).
     static let panelHeight: CGFloat = 280
 
-    static let targetScreen: NSScreen? =
-        NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main
+    /// The screen Tempo hugs, and the notch dimensions read off it.
+    ///
+    /// Re-resolved on every display change (decision 037) rather than
+    /// snapshotted at process start: `NSScreen` frames, the screen list, and
+    /// `safeAreaInsets` all change when a monitor is attached or detached, the
+    /// lid closes, or the arrangement is edited in System Settings. Caching
+    /// them left the panel parked at coordinates for a screen layout that no
+    /// longer existed.
+    private(set) static var targetScreen: NSScreen? = resolveScreen()
+    private(set) static var raw: (width: CGFloat, height: CGFloat) = resolveRaw(targetScreen)
 
-    private static let raw: (width: CGFloat, height: CGFloat) = {
-        guard let screen = targetScreen else { return (200, 32) }
+    /// Always the built-in notched display when it is present, so the pill
+    /// keeps hugging the real hardware notch no matter which screen is main.
+    /// With the lid closed the built-in leaves `NSScreen.screens` entirely, so
+    /// this falls back to the menu-bar display — documented to be index 0 of
+    /// `screens`, which (unlike `NSScreen.main`) does not depend on where the
+    /// key window is, and Tempo deliberately never has one.
+    private static func resolveScreen() -> NSScreen? {
+        NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
+            ?? NSScreen.screens.first
+            ?? NSScreen.main
+    }
+
+    private static func resolveRaw(_ screen: NSScreen?) -> (width: CGFloat, height: CGFloat) {
+        guard let screen else { return (200, 32) }
         if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
             let width = screen.frame.width - left.width - right.width
             let height = screen.safeAreaInsets.top
             if width > 0, height > 0 { return (width, height) }
         }
         return (200, 32) // notchless fallback: centered 200x32 strip
-    }()
+    }
 
-    static let notchWidth: CGFloat = raw.width
-    static let notchHeight: CGFloat = raw.height
-    static let stripHeight: CGFloat = notchHeight
+    /// Re-reads the display layout. Returns true when anything the panel or
+    /// the content lays out against actually moved, so callers can skip the
+    /// window/layout work for the many no-op notifications macOS emits during
+    /// a single reconfiguration.
+    @discardableResult
+    static func refresh() -> Bool {
+        let screen = resolveScreen()
+        let newRaw = resolveRaw(screen)
+        // Compared by value, not by object identity: macOS hands out fresh
+        // `NSScreen` instances on every reconfiguration, so an identity check
+        // would report a change for each of the several notifications one
+        // reconfiguration emits. The old instance is still what the previous
+        // frame was computed from, which is exactly the comparison wanted.
+        let changed = newRaw != raw || screen?.frame != targetScreen?.frame
+        targetScreen = screen
+        raw = newRaw
+        return changed
+    }
+
+    static var notchWidth: CGFloat { raw.width }
+    static var notchHeight: CGFloat { raw.height }
+    static var stripHeight: CGFloat { notchHeight }
 
     /// Vertical inset above and below the wing squares.
     static let contentInset: CGFloat = 6
     /// Side of the artwork / visualizer square that sits in each wing.
-    static let contentSquare: CGFloat = max(stripHeight - contentInset * 2, 0)
+    static var contentSquare: CGFloat { max(stripHeight - contentInset * 2, 0) }
     /// Inset from the pill's *outer* edge to its wing square. The silhouette's
     /// top corners sweep inward by `NotchShape.collapsedTopRadius` and its
     /// bottom corners round by `collapsedBottomRadius`, so the straight side
@@ -45,17 +85,30 @@ enum NotchGeometry {
     /// Width of the content slot in each wing. Wide enough for the artwork
     /// square *and* the visualizer's bar row, so both wings stay identical and
     /// neither one's content overflows its slot.
-    static let wingContentWidth: CGFloat = max(contentSquare, VisualizerView.naturalWidth)
+    static var wingContentWidth: CGFloat { max(contentSquare, VisualizerView.naturalWidth) }
     /// Width of one wing beside the notch.
-    static let wingWidth: CGFloat = wingOuterInset + wingContentWidth + wingInnerInset
+    static var wingWidth: CGFloat { wingOuterInset + wingContentWidth + wingInnerInset }
     /// Collapsed pill: the physical notch plus one wing on each side. This is
     /// the whole hover/hit surface while collapsed.
-    static let pillWidth: CGFloat = notchWidth + wingWidth * 2
+    static var pillWidth: CGFloat { notchWidth + wingWidth * 2 }
     /// Expanded panel, and therefore the (never resized) window width.
-    static let panelWidth: CGFloat = notchWidth + sidePadding * 2
+    static var panelWidth: CGFloat { notchWidth + sidePadding * 2 }
 
     static var screenFrame: NSRect {
         targetScreen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+    }
+
+    /// Where the window belongs right now: `panelWidth` x `panelHeight`,
+    /// horizontally centred on the target screen and flush with its top edge.
+    static var windowFrame: NSRect {
+        let screen = screenFrame
+        let width = panelWidth
+        return NSRect(
+            x: screen.midX - width / 2,
+            y: screen.maxY - panelHeight,
+            width: width,
+            height: panelHeight
+        )
     }
 }
 
@@ -85,7 +138,7 @@ final class NotchHitRegion: @unchecked Sendable {
     static let shared = NotchHitRegion()
 
     private let lock = NSLock()
-    private var stored = CGSize(width: NotchGeometry.pillWidth, height: NotchGeometry.stripHeight)
+    private var stored = CGSize(width: NotchGeometry.notchWidth, height: NotchGeometry.stripHeight)
     private var storedTarget = CGSize(width: NotchGeometry.panelWidth, height: NotchGeometry.panelHeight)
 
     var size: CGSize {
@@ -136,6 +189,8 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
 @MainActor
 final class NotchPanel: NSPanel {
     private var globalClickMonitor: Any?
+    private var screenObserver: Any?
+    private var settleTask: Task<Void, Never>?
     private let state: AppState
 
     /// Never key, never main: the panel overlays every app and must never take
@@ -172,19 +227,12 @@ final class NotchPanel: NSPanel {
     init(state: AppState, content: ContentView) {
         self.state = state
 
-        let panelWidth = NotchGeometry.panelWidth
-        let panelHeight = NotchGeometry.panelHeight
-        let pillWidth = NotchGeometry.pillWidth
-        let stripHeight = NotchGeometry.stripHeight
-        let screenFrame = NotchGeometry.screenFrame
-
-        let origin = NSPoint(
-            x: screenFrame.midX - panelWidth / 2,
-            y: screenFrame.maxY - panelHeight
+        super.init(
+            contentRect: NotchGeometry.windowFrame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
         )
-        let frame = NSRect(origin: origin, size: NSSize(width: panelWidth, height: panelHeight))
-
-        super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
 
         isFloatingPanel = true
         level = .statusBar
@@ -213,23 +261,25 @@ final class NotchPanel: NSPanel {
         //   a click on a still-visible control is still caught by us and
         //   passthrough is handed back progressively as the panel retracts.
         //   This is the fix for the click-fallthrough bug.
-        // - settled collapsed: exactly the pill.
+        // - settled collapsed: exactly the pill — which is the bare notch
+        //   when the media UI is idle (decision 038), hence a floor of
+        //   `notchWidth` and not `pillWidth`: floored at the pill it would
+        //   keep claiming the two wings after they had visibly retracted, and
+        //   those 43pt sit right beside the menu bar's own items.
+        //
+        // Every bound is read from `NotchGeometry` at call time rather than
+        // captured here, because the pill and panel widths change with the
+        // display (decision 037) — captured bounds would clamp the region to
+        // the previous screen's notch after a monitor is attached.
         let hostingView = NotchHostingView(
             activeRect: { [weak state] in
-                if state?.displayedExpanded == true {
-                    let target = NotchHitRegion.shared.expandedTarget
-                    let width = min(max(target.width, pillWidth), panelWidth)
-                    let height = min(max(target.height, stripHeight), panelHeight)
-                    return CGRect(
-                        x: (panelWidth - width) / 2,
-                        y: panelHeight - height,
-                        width: width,
-                        height: height
-                    )
-                }
-                let live = NotchHitRegion.shared.size
-                let width = min(max(live.width, pillWidth), panelWidth)
-                let height = min(max(live.height, stripHeight), panelHeight)
+                let panelWidth = NotchGeometry.panelWidth
+                let panelHeight = NotchGeometry.panelHeight
+                let source = state?.displayedExpanded == true
+                    ? NotchHitRegion.shared.expandedTarget
+                    : NotchHitRegion.shared.size
+                let width = min(max(source.width, NotchGeometry.notchWidth), panelWidth)
+                let height = min(max(source.height, NotchGeometry.stripHeight), panelHeight)
                 return CGRect(
                     x: (panelWidth - width) / 2,
                     y: panelHeight - height,
@@ -266,9 +316,55 @@ final class NotchPanel: NSPanel {
                 self.state.isHovered = false
             }
         }
+
+        // Attaching or detaching a monitor, closing the lid, or rearranging
+        // displays in System Settings moves the notch — a different screen,
+        // a different origin in the global coordinate space, or no hardware
+        // notch at all. Without this the window stayed at its launch-time
+        // frame, which is why the panel landed in the wrong place (and, in
+        // clamshell, at the wrong size) after plugging in an external display.
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.screenParametersChanged() }
+        }
+    }
+
+    /// Re-reads the display layout and moves the window to match.
+    private func screenParametersChanged() {
+        applyGeometry()
+        // macOS emits this notification while a reconfiguration is still
+        // settling — during a lid open the built-in screen can already be back
+        // in `NSScreen.screens` while its `safeAreaInsets` still read zero, so
+        // the first pass computes the notchless fallback. One re-check after
+        // the dust settles corrects that; it is a no-op when the first pass
+        // already got it right.
+        settleTask?.cancel()
+        settleTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(750))
+            guard !Task.isCancelled else { return }
+            self?.applyGeometry()
+        }
+    }
+
+    /// Moves/resizes the window onto the current notch, and tells the SwiftUI
+    /// content to re-lay out against the new dimensions. Both are skipped when
+    /// nothing actually changed.
+    func applyGeometry() {
+        guard NotchGeometry.refresh() else { return }
+        setFrame(NotchGeometry.windowFrame, display: true)
+        // ContentView reads its widths from NotchGeometry on every body
+        // evaluation; this is what makes it evaluate again.
+        state.screenGeneration &+= 1
     }
 
     deinit {
+        settleTask?.cancel()
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+        }
         if let globalClickMonitor {
             NSEvent.removeMonitor(globalClickMonitor)
         }

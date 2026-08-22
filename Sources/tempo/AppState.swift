@@ -16,7 +16,54 @@ final class AppState: ObservableObject {
     /// itself changes. Drives the `.tinted` panel style (decision 030); nil
     /// when there is no artwork, which that style reads as plain glass.
     @Published private(set) var artworkTint: NSColor? = nil
+    /// Whether the media UI (album cover, visualizer, transport controls,
+    /// playlist row) is shown at all. False when nothing has actually played
+    /// for `MusicService.mediaIdleTimeout` — a paused-and-forgotten Spotify,
+    /// or Spotify not running — so the collapsed pill shrinks back to the bare
+    /// notch instead of parking a grey placeholder and a frozen visualizer
+    /// over the desktop (decision 038). Owned by `MusicService`.
+    @Published var isMediaActive = false
+    /// Live playback position for the progress bar (decision 041). Stored as
+    /// an *anchor* — a position and the instant it was true — rather than a
+    /// ticking value, so advancing the bar costs no publishes: the view
+    /// extrapolates from this on its own clock and only a real correction
+    /// (a notification, a poll, a seek) touches state.
+    @Published var progress: PlaybackProgress? = nil
     @Published var sessions: [AgentSession] = []
+    /// Finished turns the user has already looked at (decision 044), keyed by
+    /// session id and the finish that was acknowledged — so the *next* turn a
+    /// session finishes lights its row again. App-local and in-memory: it holds
+    /// an id and a timestamp, is never written anywhere, and never touches
+    /// AgentStatus's files (Agent Guideline #3).
+    private(set) var acknowledgedFinish: [String: Date] = [:]
+    /// Mark a session's finished turn as seen. Clears the light immediately
+    /// rather than at the next poll: the same click collapses the panel, and a
+    /// light still white on the way out reads as a click that didn't take.
+    func acknowledgeFinish(_ session: AgentSession) {
+        guard session.unread else { return }
+        acknowledgedFinish[session.id] = session.updatedAt
+        if let index = sessions.firstIndex(where: { $0.id == session.id }) {
+            sessions[index].unread = false
+        }
+    }
+
+    /// Forget acknowledgements for sessions that no longer exist, so the map
+    /// tracks the live set the way the poll's other per-session memory does.
+    func pruneAcknowledgements(liveIDs: Set<String>) {
+        guard acknowledgedFinish.contains(where: { !liveIDs.contains($0.key) }) else { return }
+        acknowledgedFinish = acknowledgedFinish.filter { liveIDs.contains($0.key) }
+    }
+
+    /// The collapsed pill's summary light (decision 042). Derived, not stored:
+    /// `sessions` is the single source and republishing it is what redraws the
+    /// dot — including when a just-finished session's window expires, since
+    /// `AgentStatusService`'s 2s poll clears that flag.
+    var agentSummary: AgentSummary { AgentSummary(sessions) }
+    /// Bumped by `NotchPanel` whenever the display layout changes and the
+    /// notch geometry is re-read (decision 037). Nothing reads the value —
+    /// publishing it is what makes ContentView evaluate its body again and
+    /// pick up the new `NotchGeometry` widths.
+    @Published var screenGeneration: UInt = 0
 
     /// What the UI actually shows: expanded if either pinned by a click or
     /// currently hovered.
@@ -32,11 +79,84 @@ struct NowPlaying: Equatable {
     var isPlaying: Bool
 }
 
+/// Where playback is in the current track, as of `anchorDate`.
+///
+/// Units: everything here is **seconds**. Spotify reports `player position` in
+/// seconds but `duration` in *milliseconds* — despite its own `.sdef`
+/// documenting duration as "The length of the track in seconds" (observed
+/// 2026-08-22: a 3:26 track reports 206440; Agent Guideline #4 — observed
+/// behaviour wins over the dictionary). The conversion happens once at each
+/// parse site in `MusicService` so nothing downstream carries that trap.
+struct PlaybackProgress: Equatable {
+    var duration: TimeInterval
+    var anchorPosition: TimeInterval
+    var anchorDate: Date
+    var isPlaying: Bool
+
+    /// Position extrapolated to `date`. Paused playback ignores elapsed time,
+    /// and the result is clamped to the track so a tick arriving after the
+    /// track ended cannot draw the knob past the end of the bar.
+    func position(at date: Date) -> TimeInterval {
+        let raw = isPlaying ? anchorPosition + date.timeIntervalSince(anchorDate) : anchorPosition
+        return min(max(raw, 0), duration)
+    }
+
+    /// 0...1 along the bar. Zero-length (no track loaded, or an ad Spotify
+    /// reports as 0) reads as 0 rather than dividing by zero.
+    func fraction(at date: Date) -> Double {
+        guard duration > 0 else { return 0 }
+        return position(at: date) / duration
+    }
+}
+
 struct AgentSession: Identifiable, Equatable {
     var id: String           // session id (filename stem)
     var state: String        // "running" | "blocked" | "idle" | "error"
     var label: String
     var updatedAt: Date
+    /// The three fields click-to-focus routes on (decision 035): which kind of
+    /// host the session lives in, the folder its window is titled after, and
+    /// the process to walk up to its terminal. Nothing displays them.
+    var cwd: String
+    var ide: String
+    var pid: Int
+    /// One-line summary of what the session is working on, shown beside the
+    /// label so two sessions in the same folder are told apart (decision 040).
+    /// Empty when the status file carries no `task`.
+    var task: String
+    /// True for the first `AgentStatusService.finishedWindow` seconds after
+    /// this session was observed going running -> idle (decision 042). It is a
+    /// *transition*, not a state AgentStatus writes: the status file only ever
+    /// says "idle", and "just finished" is the thing a glance at the notch is
+    /// actually looking for.
+    var justFinished: Bool = false
+    /// Whether the status file carried a wrap-up message — AgentStatus's `Stop`
+    /// hook writes the turn's closing text into `detail`, and `SessionStart`
+    /// forces it empty, so a non-empty `detail` is the durable "this turn ended
+    /// and there is output to review" signal (decision 044). Only its emptiness
+    /// is read: the message itself is never decoded, stored or rendered
+    /// (Agent Guideline #5).
+    var hasOutput: Bool = false
+    /// A finished turn the user has not acknowledged yet — what the expanded
+    /// panel draws as a white light (decision 044). Derived each poll from
+    /// `hasOutput`, the session being idle, and `AppState.acknowledgedFinish`.
+    var unread: Bool = false
+}
+
+/// One-glance rollup of every live session, for the collapsed pill's summary
+/// dot (decision 042). Most urgent wins, and `none` means there is nothing to
+/// draw at all — the pill keeps its bare width.
+enum AgentSummary: Equatable {
+    case none, idle, running, finished, blocked, error
+
+    init(_ sessions: [AgentSession]) {
+        if sessions.isEmpty { self = .none }
+        else if sessions.contains(where: { $0.state == "error" }) { self = .error }
+        else if sessions.contains(where: { $0.state == "blocked" }) { self = .blocked }
+        else if sessions.contains(where: { $0.justFinished }) { self = .finished }
+        else if sessions.contains(where: { $0.state == "running" }) { self = .running }
+        else { self = .idle }
+    }
 }
 
 

@@ -17,7 +17,25 @@ wider than its content:
 - an **audio-reactive visualizer** on the right — five bars driven by a live
   5-band frequency analysis of Spotify's actual audio (bass in the center).
   Requires running the bundled app and the one-time audio permission below;
-  otherwise the bars fall back to a playback-synced animation.
+  otherwise the bars fall back to a playback-synced animation. The bars settle
+  when your Mac is muted or at zero volume — a process tap is taken before the
+  output device's volume, so this is deliberate: no motion for something you
+  can't hear.
+- an **agent light** outboard of the visualizer — the agent signal without
+  expanding anything. By default it is one dot carrying the most urgent state
+  across your Claude Code sessions: 🔴 an error · 🟠 one is blocked and needs
+  you · ⚪️ pulsing white, one *just finished* · 🟢 any are working · dim grey,
+  all idle. Blocked and just-finished pulse; nothing else moves. Switch it to
+  one dot per session (up to three), or off, in Settings ▸ Modules. It draws
+  nothing at all when no sessions are running.
+
+When nothing has actually played for a minute — Spotify paused and forgotten, or
+not running — the media UI switches off: the cover, the visualizer and the
+transport controls and the progress bar disappear, and the pill shrinks back to
+exactly the hardware notch — except for the agent light, which stays put, since
+that is the signal worth widening a bare notch for. It comes back the moment
+something plays again. The panel still opens on hover, with the usage graphs and
+agent lights in it.
 
 **Hover to expand** — resting the pointer on the pill briefly (60ms by default,
 adjustable in Settings ▸ General) opens the full panel, with a trackpad haptic
@@ -32,15 +50,41 @@ material on older macOS), sized to its content, opening below the notch:
   the track and artist centred above the play / pause button, the previous /
   play / next controls spread across the width beside the cover, and the
   add-to-playlist row directly under them
+- **progress bar** — elapsed time, a full-width scrubber and time remaining,
+  under the cover and controls. **Drag the knob, or click anywhere on the bar,
+  to jump to that point in the song**; the track jumps when you let go. While
+  the panel is open Tempo re-checks Spotify's real position once a second, so
+  scrubbing in Spotify's own window is reflected here too.
 - **add the current song to a Spotify playlist** — the picker lists only
   playlists you can actually add to (your own, plus collaborative ones), or just
   the ones you ticked in Settings; if an add fails, Tempo says why rather than
   just flagging it
 - **system usage** — compact CPU and memory sparklines (last 60 s, iStat-style)
-- **agent session lights** — one colored light per open Claude Code session
-  (🟢 running · 🟠 blocked, needs you · ⚪ idle · 🔴 error), read from
+- **agent session lights** — one row per open Claude Code session: a colored
+  light (🟢 running · 🟠 blocked, needs you · ⚪ finished and not yet seen ·
+  dim grey idle · 🔴 error), the session's folder, and a one-line description
+  of what it is working on, so two sessions
+  in the same repo are told apart at a glance. Read from
   [AgentStatus](https://github.com/Gameslayer999/AgentStatus)'s status files. This is
-  Tempo's differentiator over other notch apps.
+  Tempo's differentiator over other notch apps. Those files record hook *events*,
+  so Tempo cross-checks them against Claude Code's own view of each session
+  (read-only, and only what a light needs): a turn you interrupt with Ctrl-C or
+  Esc greys its light straight away instead of leaving it green, and a
+  background agent's light shows green while it is working and orange while it
+  is waiting on an answer from you. A row stays white until you click it —
+  going to the session is what marks it as seen — and lights up again the next
+  time that session finishes something. Three rows show at once and the
+  rest scroll. The description is that session's current prompt, shown in the
+  panel only — Tempo never logs it, stores it, or sends it anywhere; switch the
+  lights off in Settings ▸ Modules if you would rather it not be on screen.
+  **Click a row to go to that session**: a terminal session raises the tab it is running in (Terminal.app
+  matched by tty, Ghostty by session title), a VS Code or Cursor session raises
+  the window that has its folder open, and a Claude Desktop session brings
+  Claude forward. The panel collapses on the way out. Raising a window that is
+  on another Space or full-screen relies on the Accessibility permission — grant
+  Tempo *System Settings ▸ Privacy & Security ▸ Accessibility* for the fastest,
+  most reliable jump; without it editors are still reached through their CLI and
+  terminals through app-level focus.
 - a **gear in the top-right corner** opens Settings (below).
 
 The expanded panel is rimmed with a soft glass edge so it reads as a distinct
@@ -80,7 +124,8 @@ no Dock icon, so the gear is the only way in.
   exists at all.
 - **Modules** — show or hide the audio visualizer, the CPU/memory graphs, and
   the agent session lights. Switching the graphs off stops their sampling timer
-  entirely.
+  entirely. Separately, **Agent light** picks what the *collapsed* pill shows:
+  a summary dot (the default), one dot per session, or nothing.
 - **About** — version.
 
 Standard editing shortcuts (⌘V, ⌘C, ⌘X, ⌘A, ⌘Z) work in the Settings window, and
@@ -89,6 +134,10 @@ Standard editing shortcuts (⌘V, ⌘C, ⌘X, ⌘A, ⌘Z) work in the Settings w
 ## Requirements
 
 - macOS on a notched MacBook (works on notchless displays with a fallback strip)
+  - With an external monitor attached, the panel stays on the built-in notch. Close
+    the lid and it moves to the menu-bar display as the fallback strip, and back to
+    the notch when you open it — plugging, unplugging, and rearranging displays are
+    all followed automatically, no restart.
 - Swift toolchain (Command Line Tools are enough — the project builds with SwiftPM,
   no Xcode project)
 - **Spotify desktop app** for now-playing and transport controls
@@ -109,7 +158,8 @@ launching the new binary, so without that a rebuild silently keeps the old build
 on screen.
 
 Two one-time permission prompts, both required for full function:
-- **Automation → Spotify** — now-playing info and the transport buttons.
+- **Automation → Spotify** — now-playing info, the transport buttons, and
+  reading/setting the playback position for the progress bar.
 - **System Audio Recording** — the audio-reactive visualizer. Tempo taps only
   Spotify's audio, computes five band levels, and discards the samples; nothing
   is recorded or stored. Decline it and the visualizer simply falls back to a
@@ -124,7 +174,7 @@ keychain, and macOS may re-ask for the permissions after a rebuild.
 
 ## One-time Spotify setup (only for add-to-playlist)
 
-Play/pause/skip and artwork need **no** account setup. Adding songs to playlists
+Play/pause/skip, the progress bar and artwork need **no** account setup. Adding songs to playlists
 uses the Spotify Web API and needs a free Spotify Developer app. This can't be
 skipped or bundled: Spotify's AppleScript interface — which drives everything
 else Tempo does — has no playlist commands at all, and Spotify requires every

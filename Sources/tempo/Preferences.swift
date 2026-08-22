@@ -18,6 +18,7 @@ final class Preferences: ObservableObject {
         static let showVisualizer = "showVisualizer"
         static let showUsageGraph = "showUsageGraph"
         static let showAgentLights = "showAgentLights"
+        static let collapsedAgentLight = "collapsedAgentLight"
         static let favoritePlaylists = "favoritePlaylists"
         static let panelStyle = "panelStyle"
         static let hoverExpandDelayMS = "hoverExpandDelayMS"
@@ -33,6 +34,15 @@ final class Preferences: ObservableObject {
     }
     @Published var showAgentLights: Bool {
         didSet { defaults.set(showAgentLights, forKey: Key.showAgentLights) }
+    }
+
+    /// Shape of the agent signal in the *collapsed* pill (decision 042).
+    /// Independent of `showAgentLights`, which governs the expanded panel's
+    /// per-session list. Persisted by raw value, so an unknown string from a
+    /// future or older build falls back to the default rather than failing to
+    /// decode.
+    @Published var collapsedAgentLight: CollapsedAgentLightMode {
+        didSet { defaults.set(collapsedAgentLight.rawValue, forKey: Key.collapsedAgentLight) }
     }
 
     /// Material of the expanded panel (decision 030). Persisted by raw value,
@@ -88,12 +98,16 @@ final class Preferences: ObservableObject {
             Key.showVisualizer: true,
             Key.showUsageGraph: true,
             Key.showAgentLights: true,
+            Key.collapsedAgentLight: CollapsedAgentLightMode.summary.rawValue,
             Key.hoverExpandDelayMS: Self.defaultHoverExpandDelayMS,
         ])
         self.defaults = defaults
         showVisualizer = defaults.bool(forKey: Key.showVisualizer)
         showUsageGraph = defaults.bool(forKey: Key.showUsageGraph)
         showAgentLights = defaults.bool(forKey: Key.showAgentLights)
+        collapsedAgentLight = CollapsedAgentLightMode(
+            rawValue: defaults.string(forKey: Key.collapsedAgentLight) ?? ""
+        ) ?? .summary
         panelStyle = PanelStyle(rawValue: defaults.string(forKey: Key.panelStyle) ?? "") ?? .regular
         // Clamped on read, not just on write: a hand-edited defaults value
         // outside the slider's range would otherwise make the notch unusable.
@@ -165,6 +179,29 @@ enum PanelStyle: String, CaseIterable, Identifiable {
         case .clear: return "Barely-there glass. The window behind shows through; a slight scrim keeps the text readable."
         case .tinted: return "Frosted glass tinted with the current album cover's dominant colour."
         case .solid: return "No glass — an opaque panel that reads as one slab with the notch."
+        }
+    }
+}
+
+/// How the collapsed pill shows agent state (decision 042).
+enum CollapsedAgentLightMode: String, CaseIterable, Identifiable {
+    case off, summary, perSession
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .summary: return "Summary dot"
+        case .perSession: return "One dot per session"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .off: return "Nothing beside the notch — agent state is only in the expanded panel."
+        case .summary: return "One dot beside the visualizer, coloured by the most urgent session: red for an error, orange when one needs you, pulsing white when one just finished, green while any are working, dim grey when all are idle."
+        case .perSession: return "Up to three dots, most urgent first, each coloured for its own session. The rest are in the expanded panel."
         }
     }
 }

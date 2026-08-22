@@ -47,6 +47,13 @@ struct VisualizerView: View {
     /// — see the guard in the task below.
     @State private var didAppear = false
 
+    /// What the *fallback* animation keys off. Playing into a muted (or
+    /// zero-volume) output device is motion for something nobody can hear, so
+    /// it settles the bars exactly as a pause does (decision 039) — otherwise
+    /// muting would only swap the reactive bars for sine bars, which is the
+    /// same lie in a different mode.
+    private var animating: Bool { isPlaying && tap.outputAudible }
+
     init(isPlaying: Bool) {
         self.isPlaying = isPlaying
     }
@@ -54,7 +61,7 @@ struct VisualizerView: View {
     var body: some View {
         let reactive = tap.isCapturing
         TimelineView(.animation(minimumInterval: 1.0 / 30.0,
-                                paused: reactive || (!isPlaying && settled))) { context in
+                                paused: reactive || (!animating && settled))) { context in
             HStack(spacing: Self.barSpacing) {
                 ForEach(0..<Self.barCount, id: \.self) { index in
                     Capsule()
@@ -69,8 +76,9 @@ struct VisualizerView: View {
             // bars read as continuous motion instead of a step sequence.
             .animation(reactive ? .linear(duration: 1.0 / 30.0) : nil, value: tap.bands)
         }
-        .task(id: isPlaying) {
-            // Only a real play-state *change* starts a transition. `.task(id:)`
+        .task(id: animating) {
+            // Only a real change in whether the bars should be moving
+            // starts a transition. `.task(id:)`
             // also fires once when the view appears, and stamping
             // `transitionStart = .now` there re-created exactly the hazard the
             // `distantPast` initial value exists to avoid: on a paused launch
@@ -86,7 +94,7 @@ struct VisualizerView: View {
             } else {
                 didAppear = true
             }
-            guard !isPlaying else {
+            guard !animating else {
                 settled = false
                 return
             }
@@ -112,7 +120,7 @@ struct VisualizerView: View {
     private func playEnergy(at date: Date) -> CGFloat {
         let progress = min(max(date.timeIntervalSince(transitionStart) / transitionDuration, 0), 1)
         let eased = progress * progress * (3 - 2 * progress) // smoothstep
-        return isPlaying ? CGFloat(eased) : CGFloat(1 - eased)
+        return animating ? CGFloat(eased) : CGFloat(1 - eased)
     }
 
     /// Fallback height fraction at time `t`, blended from the idle stub height

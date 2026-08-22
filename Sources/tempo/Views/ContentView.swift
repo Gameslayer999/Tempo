@@ -89,16 +89,20 @@ struct ContentView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let notchWidth = NotchGeometry.notchWidth
-    private let stripHeight = NotchGeometry.stripHeight
-    private let wingWidth = NotchGeometry.wingWidth
-    private let wingOuterInset = NotchGeometry.wingOuterInset
-    private let wingInnerInset = NotchGeometry.wingInnerInset
-    private let contentSquare = NotchGeometry.contentSquare
-    private let wingContentWidth = NotchGeometry.wingContentWidth
-    private let pillWidth = NotchGeometry.pillWidth
-    private let panelWidth = NotchGeometry.panelWidth
-    private let panelHeight = NotchGeometry.panelHeight
+    /// Read live rather than captured: the notch dimensions change when a
+    /// display is attached, detached, or the lid closes (decision 037), and a
+    /// stored `let` would freeze this view at the launch-time screen's notch.
+    /// `state.screenGeneration` is what re-evaluates this body afterwards.
+    private var notchWidth: CGFloat { NotchGeometry.notchWidth }
+    private var stripHeight: CGFloat { NotchGeometry.stripHeight }
+    private var wingWidth: CGFloat { NotchGeometry.wingWidth }
+    private var wingOuterInset: CGFloat { NotchGeometry.wingOuterInset }
+    private var wingInnerInset: CGFloat { NotchGeometry.wingInnerInset }
+    private var contentSquare: CGFloat { NotchGeometry.contentSquare }
+    private var wingContentWidth: CGFloat { NotchGeometry.wingContentWidth }
+    private var pillWidth: CGFloat { NotchGeometry.pillWidth }
+    private var panelWidth: CGFloat { NotchGeometry.panelWidth }
+    private var panelHeight: CGFloat { NotchGeometry.panelHeight }
 
     /// Grace before collapsing: debounced so a pointer travelling from the
     /// pill into the controls doesn't read as "left the panel".
@@ -165,7 +169,39 @@ struct ContentView: View {
     // What the UI actually shows: pinned (click) or currently hovered.
     private var displayedExpanded: Bool { state.displayedExpanded }
 
-    private var currentWidth: CGFloat { displayedExpanded ? panelWidth : pillWidth }
+    /// Whether the media UI is in the hierarchy at all — cover, visualizer,
+    /// transport controls and the playlist row (decision 038). False once
+    /// nothing has played for `MusicService.mediaIdleTimeout`, which is what
+    /// takes the collapsed pill back down to the bare notch.
+    private var showsMedia: Bool { state.isMediaActive }
+
+    /// The collapsed pill: notch plus both wings while there is media to put
+    /// in them, otherwise exactly the notch — an empty pill is a black bar
+    /// hanging past the hardware notch over a light desktop, which is the
+    /// thing this state exists to remove.
+    private var collapsedWidth: CGFloat {
+        (showsMedia ? pillWidth : notchWidth) + lightSlotWidth * 2
+    }
+
+    /// Width of the agent dot(s) themselves (decision 042). Zero when there
+    /// are no live sessions or the setting is off, which is what lets the pill
+    /// keep its exact previous geometry in those cases.
+    private var lightWidth: CGFloat {
+        CollapsedAgentLight.width(sessions: state.sessions, mode: prefs.collapsedAgentLight)
+    }
+
+    /// The slot the light lives in, dots plus their gap from the pill's edge.
+    /// With media showing, the visualizer wing's own `wingOuterInset` already
+    /// provides the gap on the inboard side; without it, the slot supplies its
+    /// own so the dot doesn't sit flush against the hardware notch.
+    private var lightSlotWidth: CGFloat {
+        guard lightWidth > 0 else { return 0 }
+        return lightLeadingGap + lightWidth + wingOuterInset
+    }
+
+    private var lightLeadingGap: CGFloat { showsMedia ? 0 : wingInnerInset }
+
+    private var currentWidth: CGFloat { displayedExpanded ? panelWidth : collapsedWidth }
     private var currentHeight: CGFloat {
         displayedExpanded ? min(expandedContentHeight + stripHeight, panelHeight) : stripHeight
     }
@@ -233,6 +269,21 @@ struct ContentView: View {
         // Cover resizes with the column rather than snapping when a row
         // appears or disappears beside it.
         .animation(expandAnimation, value: headerColumnHeight)
+        // The media UI going away (or coming back) retracts/grows the pill's
+        // wings with the same spring instead of snapping a chunk of pill out
+        // of existence.
+        .animation(expandAnimation, value: showsMedia)
+        // Same for the agent light slot: a session starting or ending changes
+        // the collapsed width, and that has to spring like everything else
+        // rather than snapping the pill wider mid-glance.
+        .animation(expandAnimation, value: lightSlotWidth)
+        // The progress bar is the only thing that needs a *fresh* position,
+        // and it only exists while the panel is open — so that is exactly
+        // when the 1Hz reconciliation runs (decision 041). Collapsed, Tempo
+        // is back to its measured zero-timer rest state.
+        .onChange(of: displayedExpanded) { _, expanded in
+            music.setPanelOpen(expanded)
+        }
     }
 
     /// Collapsed: pure black, always (UI Principle #6 — must keep merging with
@@ -385,33 +436,60 @@ struct ContentView: View {
     /// While expanded the artwork is not here: it has moved into the panel
     /// header (`nowPlayingHeader`). Its slot keeps its width either way, so
     /// the visualizer and the notch gap never shift.
+    ///
+    /// Both wings leave entirely once the media UI is idle (decision 038);
+    /// what is left is the notch-width gap, so the pill is exactly the
+    /// hardware notch.
+    ///
+    /// Outboard of the visualizer sits the agent light (decision 042), in a
+    /// slot mirrored by an empty one on the leading side so the notch gap
+    /// stays centred on the hardware notch. It is deliberately *not* tied to
+    /// `showsMedia`: agent state is the one signal worth widening an otherwise
+    /// bare notch for.
     private var strip: some View {
         HStack(spacing: 0) {
-            Color.clear
-                .frame(width: wingContentWidth, height: contentSquare)
-                .overlay {
-                    if !displayedExpanded {
-                        artworkView(side: contentSquare, cornerRadius: 4)
-                            .matchedGeometryEffect(id: Self.artworkID, in: artworkNamespace)
+            // Empty mirror of the light slot. The strip is centred in the
+            // window, so a slot added on one side alone would walk the notch
+            // gap off the hardware notch by half its width (UI Principle #6).
+            if lightSlotWidth > 0 {
+                Color.clear.frame(width: lightSlotWidth, height: stripHeight)
+            }
+            if showsMedia {
+                Color.clear
+                    .frame(width: wingContentWidth, height: contentSquare)
+                    .overlay {
+                        if !displayedExpanded {
+                            artworkView(side: contentSquare, cornerRadius: 4)
+                                .matchedGeometryEffect(id: Self.artworkID, in: artworkNamespace)
+                        }
                     }
-                }
-                .padding(.leading, wingOuterInset)
-                .padding(.trailing, wingInnerInset)
-                .frame(height: stripHeight)
+                    .padding(.leading, wingOuterInset)
+                    .padding(.trailing, wingInnerInset)
+                    .frame(height: stripHeight)
+            }
             Spacer()
                 .frame(width: notchWidth)
-            Color.clear
-                .frame(width: wingContentWidth, height: contentSquare)
-                .overlay {
-                    if prefs.showVisualizer {
-                        VisualizerView(isPlaying: state.nowPlaying?.isPlaying ?? false)
+            if showsMedia {
+                Color.clear
+                    .frame(width: wingContentWidth, height: contentSquare)
+                    .overlay {
+                        if prefs.showVisualizer {
+                            VisualizerView(isPlaying: state.nowPlaying?.isPlaying ?? false)
+                        }
                     }
-                }
-                .padding(.leading, wingInnerInset)
-                .padding(.trailing, wingOuterInset)
-                .frame(height: stripHeight)
+                    .padding(.leading, wingInnerInset)
+                    .padding(.trailing, wingOuterInset)
+                    .frame(height: stripHeight)
+            }
+            if lightSlotWidth > 0 {
+                CollapsedAgentLight(sessions: state.sessions, mode: prefs.collapsedAgentLight)
+                    .frame(width: lightWidth, height: contentSquare)
+                    .padding(.leading, lightLeadingGap)
+                    .padding(.trailing, wingOuterInset)
+                    .frame(height: stripHeight)
+            }
         }
-        .frame(width: pillWidth, height: stripHeight, alignment: .top)
+        .frame(width: collapsedWidth, height: stripHeight, alignment: .top)
     }
 
     private func artworkView(side: CGFloat, cornerRadius: CGFloat) -> some View {
@@ -433,12 +511,21 @@ struct ContentView: View {
 
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            nowPlayingHeader
+            if showsMedia {
+                nowPlayingHeader
+                // Full content width, below the cover+controls block rather
+                // than inside the column beside the cover: the extra ~120pt
+                // is what makes the bar precise enough to scrub with
+                // (~1.7pt per second on a typical track instead of ~1.1).
+                if let progress = state.progress, progress.duration > 0 {
+                    PlaybackProgressView(progress: progress) { music.seek(to: $0) }
+                }
+            }
             if prefs.showUsageGraph {
                 UsageGraphView()
             }
             if prefs.showAgentLights {
-                AgentLightsView(sessions: state.sessions)
+                AgentLightsView(sessions: state.sessions, onFocus: focusSession)
             }
         }
         // Top-right corner of the panel content. An overlay rather than a
@@ -537,6 +624,23 @@ struct ContentView: View {
                 }
             )
         }
+    }
+
+    /// A click on an agent light goes to that session's window (decision 035)
+    /// and collapses the panel on the way, so the newly-fronted window isn't
+    /// left under a pinned panel. The collapse is explicit for the same reason
+    /// the gear's is: any click on the panel pins it
+    /// (`NotchPanel.sendEvent`), and the outside-click monitor never sees the
+    /// clicks Tempo's own panel receives.
+    private func focusSession(_ session: AgentSession) {
+        // Going to a finished session *is* reviewing it, so the same click
+        // clears its unread light (decision 044).
+        state.acknowledgeFinish(session)
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            state.isExpanded = false
+            state.isHovered = false
+        }
+        SessionFocusService.focus(session)
     }
 
     private func reportHeaderColumnHeight(_ height: CGFloat) {

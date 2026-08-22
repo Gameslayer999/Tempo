@@ -383,6 +383,20 @@ private struct ModulesPane: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+
+            Section {
+                Picker("Collapsed pill", selection: $prefs.collapsedAgentLight) {
+                    ForEach(CollapsedAgentLightMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+            } header: {
+                Text("Agent light")
+            } footer: {
+                Text(prefs.collapsedAgentLight.detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
         .formStyle(.grouped)
     }

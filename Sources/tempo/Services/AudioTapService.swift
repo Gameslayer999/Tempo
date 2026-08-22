@@ -185,6 +185,9 @@ private final class TapProcessor: @unchecked Sendable {
         tapBuffer = max(0, tapBufferIndex)
     }
 
+    /// Read only by the debug log line in `AudioTapService.tick`.
+    var debugTapBuffer: Int { tapBuffer }
+
     /// Recomputes band bin ranges for the tap's actual sample rate. Called on
     /// the main thread before the IO proc starts, never while it is running.
     func configure(sampleRate: Double) {
@@ -312,9 +315,18 @@ final class AudioTapService: ObservableObject {
     /// Five smoothed band levels, 0…1, bass first.
     @Published private(set) var bands: [Float] = Array(repeating: 0, count: bandCount)
 
-    /// True only while real nonzero audio has arrived recently — the signal
-    /// `VisualizerView` uses to choose reactive mode over the fallback.
+    /// True only while real nonzero audio has arrived recently *and* the
+    /// output device can actually be heard — the signal `VisualizerView` uses
+    /// to choose reactive mode over the fallback.
     @Published private(set) var isCapturing = false
+
+    /// Whether the current default output device is audible at all: not muted
+    /// and not at zero volume (decision 039). A process tap is taken *before*
+    /// the device's volume and mute are applied, so without this the bars
+    /// danced at full height on a muted Mac — motion for something nobody can
+    /// hear (UI Principle #5). Fails open: a device that exposes neither
+    /// property is treated as audible, which is the pre-existing behaviour.
+    @Published private(set) var outputAudible = true
 
     /// Set when the tap delivers callbacks that are all exactly zero while
     /// Spotify reports running output. That is what a TCC-denied tap looks
@@ -336,6 +348,13 @@ final class AudioTapService: ObservableObject {
     private var lastBuildAttempt: UInt64 = 0
 
     private var pump: Timer?
+    /// The device the mute/volume listeners below are attached to, and the
+    /// blocks themselves — both needed to detach them when the default output
+    /// device changes.
+    private var audibilityDevice: AudioObjectID = 0
+    private var audibilityListeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+    private var lastDebugLog: UInt64 = 0
+    private var lastDebugLive = false
     private var rebuild: DispatchWorkItem?
     private var raw = [Float](repeating: 0, count: bandCount)
     private var level = [Float](repeating: 0, count: bandCount)
@@ -353,6 +372,7 @@ final class AudioTapService: ObservableObject {
         observeSpotify()
         observeProcessObjects()
         observeOutputDevice()
+        observeAudibility()
         syncTap()
     }
 
@@ -393,8 +413,95 @@ final class AudioTapService: ObservableObject {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
         _ = AudioObjectAddPropertyListenerBlock(Self.systemObject, &address, .main) { _, _ in
-            Task { @MainActor in AudioTapService.shared.scheduleRebuild() }
+            Task { @MainActor in
+                AudioTapService.shared.observeAudibility()
+                AudioTapService.shared.scheduleRebuild()
+            }
         }
+    }
+
+    // MARK: Output audibility
+
+    /// (Re)attaches mute and volume listeners to the current default output
+    /// device and re-reads `outputAudible` (decision 039).
+    ///
+    /// Listener-driven, not polled: the pump stops while the bars are flat, so
+    /// polling inside `tick()` would never see the un-mute that has to bring
+    /// them back — which is also why becoming audible restarts the pump here.
+    /// The audio thread only signals on a silence→sound edge, and muting does
+    /// not create one: the tap goes on delivering the same nonzero audio.
+    private func observeAudibility() {
+        for (address, block) in audibilityListeners {
+            var address = address
+            AudioObjectRemovePropertyListenerBlock(audibilityDevice, &address, .main, block)
+        }
+        audibilityListeners.removeAll()
+        audibilityDevice = Self.defaultOutputDevice() ?? 0
+
+        guard audibilityDevice != 0 else {
+            setOutputAudible(true)
+            return
+        }
+
+        for selector in [kAudioDevicePropertyMute, kAudioHardwareServiceDeviceProperty_VirtualMainVolume] {
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector,
+                mScope: kAudioObjectPropertyScopeOutput,
+                mElement: kAudioObjectPropertyElementMain)
+            guard AudioObjectHasProperty(audibilityDevice, &address) else { continue }
+            let block: AudioObjectPropertyListenerBlock = { _, _ in
+                Task { @MainActor in
+                    AudioTapService.shared.setOutputAudible(AudioTapService.isOutputAudible())
+                }
+            }
+            guard AudioObjectAddPropertyListenerBlock(audibilityDevice, &address, .main, block) == noErr else {
+                continue
+            }
+            audibilityListeners.append((address, block))
+        }
+
+        setOutputAudible(Self.isOutputAudible())
+    }
+
+    private func setOutputAudible(_ audible: Bool) {
+        guard outputAudible != audible else { return }
+        outputAudible = audible
+        tempoDebug("outputAudible=\(audible)")
+        // Audible again: the audio thread will not signal, because it never
+        // went silent. Restart the pump so the bars pick the music back up.
+        if audible { startPump() }
+    }
+
+    /// Not muted, and not at zero volume. Either property missing is read as
+    /// audible — never as silence — so an unusual device degrades to the old
+    /// always-reactive behaviour instead of a permanently dead visualizer.
+    private static func isOutputAudible() -> Bool {
+        guard let device = defaultOutputDevice() else { return true }
+
+        var muteAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var muted: UInt32 = 0
+        var muteSize = UInt32(MemoryLayout<UInt32>.size)
+        if AudioObjectHasProperty(device, &muteAddress),
+           AudioObjectGetPropertyData(device, &muteAddress, 0, nil, &muteSize, &muted) == noErr,
+           muted != 0 {
+            return false
+        }
+
+        var volumeAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var volume: Float32 = 1
+        var volumeSize = UInt32(MemoryLayout<Float32>.size)
+        if AudioObjectHasProperty(device, &volumeAddress),
+           AudioObjectGetPropertyData(device, &volumeAddress, 0, nil, &volumeSize, &volume) == noErr {
+            return volume > 0.0001
+        }
+
+        return true
     }
 
     /// Output switches emit several notifications in a row; coalesce them.
@@ -511,6 +618,11 @@ final class AudioTapService: ObservableObject {
         tapID = tap
         aggregateID = aggregate
         ioProcID = proc
+        tempoDebug(String(format:
+            "tap built pid=%d processObject=%u subDeviceInputBuffers=%d aggregateInputBuffers=%d tapBuffer=%d outputUID=%@",
+            pid, processObject, Self.inputBufferCount(outputDevice),
+            Self.inputBufferCount(aggregate),
+            Self.tapBufferIndex(aggregate: aggregate, subDevice: outputDevice), outputUID))
         tapStarted = DispatchTime.now().uptimeNanoseconds
         silentDenialSuspected = false
         startPump()
@@ -570,9 +682,13 @@ final class AudioTapService: ObservableObject {
         let silentFor = stamps.lastNonzero == 0
             ? Double.infinity
             : Double(now &- stamps.lastNonzero) / 1e9
-        let live = silentFor < captureHoldSeconds
+        // Real audio is arriving from the tap — independent of whether any of
+        // it can be heard. The TCC-denial heuristic below keys off this, not
+        // off `live`: a muted Mac is not a denied tap.
+        let hasSignal = silentFor < captureHoldSeconds
+        let live = hasSignal && outputAudible
 
-        if live {
+        if hasSignal {
             silentDenialSuspected = false
         } else if !silentDenialSuspected,
                   silentFor > silentDenialSeconds,
@@ -585,6 +701,20 @@ final class AudioTapService: ObservableObject {
         }
 
         if isCapturing != live { isCapturing = live }
+
+        if tempoDebugEnabled {
+            let sinceLog = lastDebugLog == 0 ? Double.infinity : Double(now &- lastDebugLog) / 1e9
+            if live != lastDebugLive || sinceLog > 1 {
+                lastDebugLive = live
+                lastDebugLog = now
+                let peak = raw.max() ?? 0
+                tempoDebug(String(format:
+                    "tap live=%d silentFor=%.2f suspected=%d tapBuffer=%d rawPeak=%.3f spotifyRunningOutput=%d",
+                    live ? 1 : 0, silentFor, silentDenialSuspected ? 1 : 0,
+                    processor.debugTapBuffer, peak,
+                    Self.isRunningOutput(processObjectID) ? 1 : 0))
+            }
+        }
 
         var settled = true
         for i in 0..<bandCount {
