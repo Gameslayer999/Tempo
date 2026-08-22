@@ -55,6 +55,7 @@
 | 042 | 2026-08-22 | The collapsed pill carries an agent light outboard of the visualizer — a summary dot by default, switchable in Settings — with a derived "just finished" state, mirrored slot geometry, and no dependence on media being active — amends 005/038 | Accepted |
 | 043 | 2026-08-22 | Lights reconcile against Claude Code's own view: an interrupted turn greys, a background job's light says what Claude Code says — reads `~/.claude/sessions` and `claude agents --json`, both read-only — amends 005 | Accepted |
 | 044 | 2026-08-22 | The expanded panel's rows show a white **unread** light for a finished turn nobody has looked at, cleared by the click that goes to the session; derived from `detail`'s emptiness, kept out of the collapsed pill — amends 005/042 | Accepted |
+| 045 | 2026-08-22 | One finish, one light: the collapsed pill's white dot stops pulsing and reads `unread` as well as `justFinished`, and acknowledging a row clears both flags — fixes a white pill over a grey row — amends 042/044 | Accepted |
 
 ---
 
@@ -2474,3 +2475,78 @@ even though its `detail` is non-empty; acknowledging clears the light immediatel
 *and* keeps it clear across the polls that follow; and the next finish lights it
 again. Live against this machine's real files: the session that had finished a
 turn reads unread, the one mid-turn does not.
+
+---
+
+## 045 — One finish, one light: the pill's white dot goes steady and follows the row (amends 042, 044)
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+### Context
+
+Two things about the white "finished" light were wrong in use.
+
+**It pulsed.** Decision 042 gave the collapsed pill's just-finished dot the same
+pulse as blocked. Sitting beside a moving visualizer, a second animated element
+made the pill read as busy, and it blurred the one distinction motion is supposed
+to carry: blocked is the state you have to act on, finished is only a state to
+notice. Decision 044 had already settled this for the expanded row — steady white
+there, explicitly "steady, not pulsing" — leaving the two surfaces disagreeing
+about the same event.
+
+**The two surfaces went out at different times.** They read different flags for
+one event: the row reads `unread` (durable, cleared by the click), the pill reads
+`justFinished` (a 20s window off the running → idle transition). So clicking a row
+greyed the row and left the pill white above it for the rest of the window — the
+observed bug — and, in the other direction, a finish older than 20s kept a white
+row under a grey pill. 044 listed "make the pill's summary unread-based too" as a
+deferred option, on the grounds that it changed 042's observable behaviour
+(Guideline #7) and had not been asked for. It has now been asked for.
+
+### Options considered
+
+| Option | Verdict |
+| --- | --- |
+| **Pill reads `unread \|\| justFinished`; acknowledging clears both** | **Chosen** — one event, one light on both surfaces, and neither existing case is lost |
+| Pill reads `unread` alone | Rejected — drops the white flash for a turn that ends with no wrap-up message, which 042's dot does cover today |
+| Leave the flags apart, just suppress the pill for the window after a click | Rejected — patches the symptom and keeps two sources of truth for one event |
+| Keep the pulse, fix only the desync | Rejected — the pulse is half of what was reported, and it contradicts 044's own reasoning |
+
+### Decision
+
+**The pill's white dot is steady, and the pill and the row read the same
+finish.**
+
+- **Only blocked pulses.** Motion in Tempo now means exactly one thing: this one
+  wants you (UI Principle #5). Finished keeps its halo — a solid white dot with a
+  steady glow — so it is still the second-most prominent thing in the pill without
+  moving.
+- **`AgentSummary.finished` reads `justFinished || unread`.** The transient flag
+  covers a turn that ended with no wrap-up message; the durable one keeps the
+  light on until the row is clicked. Both are the same event, so both light the
+  same dot.
+- **Acknowledging clears both flags.** The click that goes to a session clears
+  `unread` *and* `justFinished`, and the poll no longer re-raises `justFinished`
+  for a finish already acknowledged at that `updated_at`. Nothing about the
+  acknowledgement record changes: still app-local, in-memory, never written, and
+  still nothing is read from or written to `~/.claude/status/**` (Guideline #3).
+
+### Implementation
+
+- `SummaryDot` (`CollapsedAgentLight.swift`): `pulses` is `blocked` only; a new
+  `glows` (`blocked || finished`) keeps the halo on the steady white dot.
+- `AgentSummary.init` (`AppState.swift`): `.finished` when any session is
+  `justFinished || unread`.
+- `AppState.acknowledgeFinish(_:)`: takes a `justFinished` session too, and
+  clears both flags on the spot.
+- `AgentStatusService.markFinished(_:)`: skips (and drops) a `finishedAt` whose
+  finish is already acknowledged at that `updated_at`.
+
+### Verification
+
+`scripts/test-agent-lights.sh` — 30 checks, all passing. New for this decision:
+a clean finish lights the pill dot white; an `unread` session alone lights it too
+(the case that used to go dark after 20s); acknowledging clears `justFinished`
+with `unread`, takes the pill dot out with the row, and keeps it out across the
+polls still inside the finished window.

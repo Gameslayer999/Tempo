@@ -24,8 +24,10 @@ wider than its content:
 - an **agent light** outboard of the visualizer — the agent signal without
   expanding anything. By default it is one dot carrying the most urgent state
   across your Claude Code sessions: 🔴 an error · 🟠 one is blocked and needs
-  you · ⚪️ pulsing white, one *just finished* · 🟢 any are working · dim grey,
-  all idle. Blocked and just-finished pulse; nothing else moves. Switch it to
+  you · ⚪️ solid white, one *just finished* and you haven't looked at it yet ·
+  🟢 any are working · dim grey, all idle. Only blocked pulses; nothing else
+  moves. The white dot goes out on the same click that clears the row's white
+  light in the panel, so the two never disagree. Switch it to
   one dot per session (up to three), or off, in Settings ▸ Modules. It draws
   nothing at all when no sessions are running.
 

@@ -209,6 +209,18 @@
 
 ## Recently completed
 
+- **2026-08-22** — **One finish, one light (decision 045).** Reported live: after
+  clicking a row, the panel's dot went grey while the pill above it kept pulsing
+  white. The two surfaces were reading different flags for the same event — the
+  row `unread` (durable, cleared by the click), the pill `justFinished` (a 20s
+  window off the running → idle transition) — so a click cleared one and not the
+  other, and a finish older than 20s had the mirror-image problem. Now: the pill's
+  white dot is **steady** (only blocked pulses; finished keeps its halo without
+  moving), `AgentSummary.finished` reads `justFinished || unread`, and
+  acknowledging a row clears both flags with the poll no longer re-raising the
+  transient one for a finish already seen. `scripts/test-agent-lights.sh` is up to
+  30 checks, all passing.
+
 - **2026-08-22** — **White unread light in the expanded panel (decision 044).**
   The panel's rows drew the same grey dot for a session that had just finished a
   turn and one idle since breakfast; only the collapsed pill said anything, and
@@ -220,9 +232,9 @@
   output to review". Only its **emptiness** is read; the message is never decoded
   (Agent Guideline #5). An interrupted turn (decision 043) is explicitly not
   unread — its `detail` is the cancelled tool call, not a wrap-up. The collapsed
-  pill keeps 042's transient dot on purpose: persistent-until-clicked in a list
-  you read, transient in a pill you glance at. Covered by
-  `scripts/test-agent-lights.sh` (24 checks) and confirmed live.
+  pill kept 042's transient dot at the time — superseded by decision 045, which
+  made the pill read this light too. Covered by
+  `scripts/test-agent-lights.sh` (24 checks then, 30 now) and confirmed live.
 
 - **2026-08-22** — **Lights reconcile against Claude Code's own view
   (decision 043).** Reported live: a session interrupted mid-turn went grey on

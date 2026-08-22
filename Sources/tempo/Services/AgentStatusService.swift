@@ -308,7 +308,12 @@ final class AgentStatusService: ObservableObject {
             lastStates[session.id] = session.state
 
             guard let at = finishedAt[session.id] else { return session }
-            guard now.timeIntervalSince(at) < Self.finishedWindow else {
+            // A finish the user has already gone and looked at is over, however
+            // much of the window is left: re-raising it here is what put a white
+            // dot back in the pill after the click had greyed the row
+            // (decision 045).
+            guard now.timeIntervalSince(at) < Self.finishedWindow,
+                  state.acknowledgedFinish[session.id] != session.updatedAt else {
                 finishedAt[session.id] = nil
                 return session
             }

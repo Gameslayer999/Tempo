@@ -1,6 +1,7 @@
 #!/bin/bash
 # Verify what the agent lights actually show — the reconciliation of decision
-# 043 and the unread light of decision 044 — against fixture directories.
+# 043, the unread light of 044 and the shared finish signal of 045 — against
+# fixture directories.
 #
 # The status file records hook *events*, so a turn the user interrupts leaves a
 # green light on disk forever, and a background job's `idle` says nothing about
@@ -120,6 +121,10 @@ func phase1() {
     // Poll 1 kicks off the listing query; the poll after it reconciles with it.
     RunLoop.main.run(until: Date().addingTimeInterval(3.0))
     func light(_ id: String) -> AgentSession? { state.sessions.first { \$0.id == id } }
+    // What the collapsed pill would draw for that one session.
+    func summary(_ id: String) -> String {
+        light(id).map { String(describing: AgentSummary([\$0])) } ?? "-"
+    }
 
     check("bg working -> green", light("E")?.state ?? "-", "running")
     check("bg stopped to ask -> orange", light("F")?.state ?? "-", "blocked")
@@ -150,6 +155,10 @@ func phase1() {
     RunLoop.main.run(until: Date().addingTimeInterval(2.5))
     check("the next finish lights it again", String(light("J")?.unread ?? false), "true")
 
+    // 045: the pill dot reads the same finish the row does, so an unread
+    // session lights it white even after the 20s "just finished" window.
+    check("unread alone -> the pill dot is white", summary("J"), "finished")
+
     // A's turn is interrupted: Claude Code goes idle, and no Stop event ever
     // fires, so the status file still says running.
     let now = Int(Date().timeIntervalSince1970)
@@ -166,6 +175,17 @@ func phase1() {
     check("clean finish -> grey", light("D")?.state ?? "-", "idle")
     check("clean finish is 'just finished'", String(light("D")?.justFinished ?? false), "true")
     check("clean finish is unread", String(light("D")?.unread ?? false), "true")
+    check("clean finish -> the pill dot is white", summary("D"), "finished")
+
+    // 045: clicking the row clears *both* finished flags, so the pill above the
+    // panel can never stay white over a row the click has already greyed.
+    if let d = light("D") { state.acknowledgeFinish(d) }
+    check("acknowledged -> 'just finished' out too", String(light("D")?.justFinished ?? true), "false")
+    check("acknowledged -> the pill dot goes out with the row", summary("D"), "idle")
+    RunLoop.main.run(until: Date().addingTimeInterval(2.5))
+    check("acknowledged -> 'just finished' stays out inside the window",
+          String(light("D")?.justFinished ?? true), "false")
+    check("acknowledged -> the pill dot stays out", summary("D"), "idle")
 
     let spawns = (try? String(contentsOfFile: fixture + "/spawns.log", encoding: .utf8)) ?? ""
     check("a background job is possible -> the listing is queried",
@@ -199,7 +219,7 @@ while IFS= read -r f; do SOURCES+=("$f"); done < <(
 swiftc -o "$FIX/fixtest" "${SOURCES[@]}" "$FIX/AgentStatusService.swift" "$FIX/main.swift"
 
 status=0
-echo "— reconciliation (043) and the unread light (044) —"
+echo "— reconciliation (043), the unread light (044), one finish one light (045) —"
 python3 "$FIX/fixture.py" "$FIX" 1 && "$FIX/fixtest" 1 || status=1
 echo "— the listing subprocess is not spawned when it cannot matter —"
 python3 "$FIX/fixture.py" "$FIX" 2 && "$FIX/fixtest" 2 || status=1

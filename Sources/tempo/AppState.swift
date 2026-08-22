@@ -39,11 +39,18 @@ final class AppState: ObservableObject {
     /// Mark a session's finished turn as seen. Clears the light immediately
     /// rather than at the next poll: the same click collapses the panel, and a
     /// light still white on the way out reads as a click that didn't take.
+    ///
+    /// Both finished flags are cleared, not just `unread`. They are two views
+    /// of one event — the row reads `unread`, the collapsed pill reads
+    /// `justFinished` — and clearing only one left the panel's row grey while
+    /// the pill above it still lit white for the rest of the finished window
+    /// (decision 045).
     func acknowledgeFinish(_ session: AgentSession) {
-        guard session.unread else { return }
+        guard session.unread || session.justFinished else { return }
         acknowledgedFinish[session.id] = session.updatedAt
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             sessions[index].unread = false
+            sessions[index].justFinished = false
         }
     }
 
@@ -146,6 +153,11 @@ struct AgentSession: Identifiable, Equatable {
 /// One-glance rollup of every live session, for the collapsed pill's summary
 /// dot (decision 042). Most urgent wins, and `none` means there is nothing to
 /// draw at all — the pill keeps its bare width.
+///
+/// `.finished` reads *both* finished flags, so the pill and the expanded row
+/// it summarises are never lit differently: the transient one covers a turn
+/// that ended with no wrap-up message, the durable one keeps the light on
+/// until the row is clicked (decision 045).
 enum AgentSummary: Equatable {
     case none, idle, running, finished, blocked, error
 
@@ -153,7 +165,7 @@ enum AgentSummary: Equatable {
         if sessions.isEmpty { self = .none }
         else if sessions.contains(where: { $0.state == "error" }) { self = .error }
         else if sessions.contains(where: { $0.state == "blocked" }) { self = .blocked }
-        else if sessions.contains(where: { $0.justFinished }) { self = .finished }
+        else if sessions.contains(where: { $0.justFinished || $0.unread }) { self = .finished }
         else if sessions.contains(where: { $0.state == "running" }) { self = .running }
         else { self = .idle }
     }

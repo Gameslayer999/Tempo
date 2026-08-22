@@ -51,9 +51,11 @@ struct CollapsedAgentLight: View {
     }
 }
 
-/// One dot. Blocked and just-finished pulse; everything else is steady, so
-/// motion in the pill only ever means "this one wants you" or "this one is
-/// done" (UI Principle #5).
+/// One dot. Only blocked pulses, so motion in the pill means exactly one
+/// thing — "this one wants you" (UI Principle #5). A finished-and-unread
+/// session is a solid white light with a steady halo: it is a state to notice,
+/// not one to act on, and a second moving signal beside the visualizer made
+/// the pill read as busy rather than glanceable (decision 045).
 private struct SummaryDot: View {
     var summary: AgentSummary
 
@@ -69,7 +71,9 @@ private struct SummaryDot: View {
         }
     }
 
-    private var pulses: Bool { summary == .blocked || summary == .finished }
+    private var pulses: Bool { summary == .blocked }
+    /// The halo the attention states carry whether or not they move.
+    private var glows: Bool { summary == .blocked || summary == .finished }
 
     var body: some View {
         Circle()
@@ -80,7 +84,7 @@ private struct SummaryDot: View {
             .opacity(summary == .idle ? 0.4 : (pulses && pulse ? 0.45 : 1))
             .scaleEffect(pulses && pulse ? 1.2 : 1)
             .frame(width: CollapsedAgentLight.dotSize, height: CollapsedAgentLight.dotSize)
-            .shadow(color: color.opacity(pulses ? 0.7 : 0), radius: 3)
+            .shadow(color: color.opacity(glows ? 0.7 : 0), radius: 3)
             .onAppear { syncPulse() }
             // Unlike the expanded panel's rows — which are created fresh each
             // time the panel opens — this dot is long-lived and changes state
