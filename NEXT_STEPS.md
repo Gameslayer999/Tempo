@@ -7,6 +7,15 @@
 
 ## Current state
 
+- **Sapphire feature review landed (2026-08-22), decisions 049–052.** Tempo now
+  shows now-playing for *any* player, carries an output-device/volume row and a
+  drag-aware file shelf in the expanded panel, and has a Bluetooth service that
+  the platform currently refuses to let run. Debug and release builds are clean
+  with no warnings; `dist/Tempo.app` runs healthy with the adapter stream as a
+  child process. See **Now** for what still needs a human to look at it — the
+  file-shelf drag interaction in particular has never been exercised by a real
+  drag.
+
 - **Core-functionality rework landed (2026-08-20), decisions 012–018.** Debug and
   release builds exit 0; the app now runs primarily as a signed bundle
   (`scripts/make-app.sh` → `dist/Tempo.app` — required for audio capture). What
@@ -92,6 +101,45 @@
 
 ## Now
 
+- [ ] **Verify the file shelf by actually dragging a file (decision 051)** —
+      this is the one part that could not be verified without a human. Synthetic
+      mouse events do not populate the drag pasteboard, so the detection
+      heuristic itself is untested end to end. Pick up a file in Finder and
+      drag it toward the notch: the panel should open as a dashed drop well
+      *before* you reach it (about 80pt out), and let go to keep it. Then hover
+      the notch later — the shelf row should show the item; drag it back out to
+      a Finder window, and right-click it for Reveal/Remove. Expect the panel
+      to open a few pixels into the drag rather than instantly, since AppKit
+      fills the drag pasteboard when the session begins. Also check: a drag
+      that passes *near* the notch and moves away collapses it again, and a
+      drag that ends elsewhere does not leave the panel stuck open (there is a
+      0.2s watchdog for exactly that).
+
+- [ ] **Try the audio output row (decision 050)** — open the panel: the mute
+      button, volume slider and a chip per output device. Click a chip and the
+      system output should switch (check System Settings ▸ Sound agrees).
+      Connect AirPods and confirm a new chip appears without a relaunch. Select
+      an HDMI/display output and confirm it says the device owns its volume
+      rather than showing a dead slider. Untested on this machine:
+      Bluetooth/AirPlay/USB device symbols, since none was connected.
+
+- [ ] **Check now-playing across players (decision 049)** — play something in
+      Apple Music, then a YouTube video in a browser, then a podcast: the cover,
+      title, artist, progress bar and the transport buttons should all follow
+      whatever is playing. Confirm the add-to-playlist row is *disabled* while
+      a non-Spotify source is playing and enabled again for Spotify. Verified
+      already: Spotify and Chrome are both picked up, play/pause tracks live,
+      and an external seek reaches the bar in about half a second.
+
+- [ ] **Check the panel-style previews (decision 046)** — Settings ▸ General ▸
+      Expanded panel now shows four mini panels instead of a menu. Confirm the
+      three glass ones actually look different from each other (each is a real
+      `glassEffect` sampling the card's own gradient backdrop — if they render
+      flat/identical, the effect isn't sampling in-window content and the
+      backdrop needs to move behind the whole row instead), that **Album tint**
+      picks up the colour of whatever is playing and updates on a track change,
+      and that clicking a card changes the live notch.
+
 - [ ] **Look at the collapsed agent light (decision 042)** — with a session
       running, the pill should carry a green dot to the right of the bars and
       stay centred on the physical notch. Check: the dot survives the media
@@ -167,6 +215,14 @@
 - [ ] **Verify the OAuth flow live** — create the Spotify Developer app (README),
       add the Client ID, Connect Spotify, add a song to a playlist.
 
+- [ ] **Decide what to do about Bluetooth notices (decision 052)** — the service
+      is written and safe but dormant: CoreBluetooth never powers on for this
+      process, so `IOBluetooth` blocks forever and no event can ever fire. It is
+      confined to its own thread so it cannot freeze Tempo, and nothing is wired
+      to the UI. First thing to check: whether Tempo appears in System Settings
+      ▸ Privacy & Security ▸ Bluetooth at all now that the bundle carries
+      `NSBluetoothAlwaysUsageDescription`. If it does, only the UI is left.
+
 ## Next
 
 - [ ] Agent lights in the *collapsed* pill (tiny dots) — currently expanded-only.
@@ -182,6 +238,18 @@
 
 ## Later
 
+- [ ] **`AudioTapService.shared` blocks the main thread while it starts the tap.**
+      Found while debugging decision 049: the singleton is initialised lazily
+      from inside `ContentView.strip`'s body, so `AudioDeviceStart` runs on the
+      main thread during a SwiftUI body evaluation. When the audio permission
+      is not in force (observed by launching the bare binary rather than the
+      bundle) it never returns and the whole app freezes — `sample` showed the
+      main thread parked in `mach_msg2_trap` under
+      `AudioTapService.buildTap(pid:)` indefinitely. The bundled, permitted
+      launch path is fine, so this is not a user-facing bug today, but a slow
+      or waking audio device would hit the same path. Pre-existing; not
+      touched as part of the four features above.
+
 - [ ] Apple Music support (AppleScript dictionary exists; artwork via `artworks`
       raw data instead of a URL).
 - [ ] Network throughput in the usage row (Notchy shows it; `getifaddrs` deltas,
@@ -190,6 +258,11 @@
       machines without AgentStatus) — deferred per decision 005.
 - [ ] Click a light → focus that session (port AgentStatus's focus logic).
 - [ ] Calendar / battery / file-shelf modules (category table stakes, out of v1).
+- [ ] Context as a **percentage** on the agent rows, if Claude Code ever records
+      which context window a session was opened with. Today the transcript says
+      only `claude-opus-5`, and a session here peaked at 460k, so the figure is
+      absolute (decision 048). The check is a `grep` for a window-size field in a
+      fresh transcript — nothing else needs to change.
 
 ## Decisions needed
 
@@ -208,6 +281,77 @@
   (c) accept it and document. Awaiting the user's call. -->
 
 ## Recently completed
+
+### 2026-08-22 — four features from the Sapphire feature review (decisions 049–052)
+
+- **Now-playing for every player, not just Spotify (049).** The private
+  MediaRemote framework, reached through an entitled `/usr/bin/perl` loading a
+  vendored BSD-licensed adapter (`Vendor/mediaremote-adapter`, built by
+  `scripts/build-media-adapter.sh`, bundled by `make-app.sh`). Verified live on
+  macOS 26.6.1 before any code was written: real metadata from Chrome *and*
+  Spotify, play/pause tracked within half a second, and external seeks pushed
+  with a fresh anchor. `MusicService` shrank 557 → ~130 lines and now supplies
+  only the Spotify track URI that add-to-playlist needs. **Decision 041's 1Hz
+  reconciliation poll was deleted** — the stream reports external seeks, so an
+  open panel now costs zero timers.
+- **Audio output row (050).** Output-device chips, volume and mute through the
+  Core Audio HAL. Tempo deliberately never joins the render path. Uncovered
+  and worked around a real bug: `AudioObjectAddPropertyListenerBlock` cannot be
+  removed from Swift (measured: listeners still fired after removal), so all
+  listeners use the C-proc API.
+- **File shelf (051).** Global drag detection via the drag pasteboard's change
+  count — verified to need **no** permission — opens the panel as a drop target
+  ~80pt out from the pill, with the activation region re-read per event so it
+  follows the notch across displays. Dropped files are copied into Application
+  Support with a JSON index; items drag back out.
+- **Bluetooth notices (052) — built but dormant.** `IOBluetooth` blocks forever
+  in this process because CoreBluetooth never powers on for it (reproduced
+  across five signing/launch configurations, no TCC prompt ever shown). The
+  service is confined to a dedicated thread so it cannot freeze Tempo, and is
+  not wired to any UI.
+
+- **2026-08-22** — **Token and timing figures on the agent rows (decision 048).**
+  The rows said which sessions were alive and what each was doing, but nothing
+  about cost or pace. AgentStatus's status files carry no such fields (verified
+  against the installed writer), so the figures come from Claude Code's own
+  transcripts at `~/.claude/projects/<slug>/<session_id>.jsonl` — same session
+  id, read-only, numbers and timestamps only. New `SessionStatsService` publishes
+  `AppState.sessionStats`; each row gained a right-aligned
+  **context · spend · turn length** cluster (`125k · 581k · 2m14s`), the turn
+  length counting up live on a 1Hz `TimelineView` while a turn runs.
+  Transcripts reach 2.4MB here, so a poll reads only the bytes appended since
+  the last one, leaves a mid-append fragment for the next poll, and resets its
+  totals if the file was rewritten shorter. Context is absolute, never a
+  percentage: the transcript does not record which context window a session was
+  opened with, and one session here peaked at 460,201 tokens. No dollar figure —
+  Claude Code records no cost, so any number would be invented. Gated on a new
+  Settings ▸ Modules toggle (`showAgentStats`) together with the lights: off
+  stops the service and drops every cursor, so no transcript is opened at all.
+  New `scripts/test-session-stats.sh` (11 checks, all passing) covers subagent
+  exclusion, incremental append, a mid-append fragment and a rewritten file;
+  cross-checked against a live transcript, where the service and an independent
+  computation agreed exactly.
+
+- **2026-08-22** — **Agent rows sort attention-first (decision 047).** The row
+  sort ranked on the `state` string alone, and a finished turn is `idle` — so the
+  white "finished, not yet seen" row sat below every running session, out of the
+  three rows the panel shows without scrolling. `AgentStatusService.sort` now
+  ranks the session rather than its state: blocked/error, then an unacknowledged
+  finish (`justFinished || unread`, the same pair the pill reads), then running,
+  then idle. The collapsed pill and the first row now always point at the same
+  session. `scripts/test-agent-lights.sh` is up to 31 checks, all passing.
+
+- **2026-08-22** — **The panel-style picker previews itself (decision 046).**
+  Settings ▸ General's *Expanded panel* row was four names in a menu; three of
+  the four styles differ only in translucency, so choosing meant closing
+  Settings and hovering the notch, once per style. It is now four selectable
+  miniatures (`Views/PanelStylePreview.swift`) drawn with the panel's own layer
+  stack — `NotchShape`, substrate, the same `Glass` switch, clear-glass scrim,
+  black top blend, rim — over a synthetic desktop gradient, which is what makes
+  a translucent material legible in an opaque Settings window. The **Album
+  tint** card uses the live `AppState.artworkTint`, so `SettingsView` now takes
+  `AppState` (a plain `let`, tracked through `objectWillChange` — Settings must
+  not redraw on every playback publish).
 
 - **2026-08-22** — **One finish, one light (decision 045).** Reported live: after
   clicking a row, the panel's dot went grey while the pill above it kept pulsing

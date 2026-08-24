@@ -27,6 +27,15 @@ RELEASE_BIN="$REPO_ROOT/.build/release/${EXECUTABLE_NAME}"
 #    .build/; another agent building this repo at the same time can cause a
 #    transient failure. Retry a couple of times before giving up.
 # ---------------------------------------------------------------------------
+# The MediaRemote adapter must exist before the bundle is assembled — it is
+# copied into Contents/Resources below, and Tempo has no now-playing signal
+# without it. Its own script verifies the entitlement still holds.
+echo "==> Building the MediaRemote adapter…"
+if ! "$SCRIPT_DIR/build-media-adapter.sh"; then
+  echo "error: scripts/build-media-adapter.sh failed" >&2
+  exit 1
+fi
+
 echo "==> Building ${EXECUTABLE_NAME} (release)…"
 
 MAX_ATTEMPTS=3
@@ -74,6 +83,17 @@ cp "$RELEASE_BIN" "$APP_BUNDLE/Contents/MacOS/${EXECUTABLE_NAME}" || {
 }
 chmod +x "$APP_BUNDLE/Contents/MacOS/${EXECUTABLE_NAME}"
 
+# The adapter: the perl loader plus the framework it dlopen()s. Both live in
+# Resources, which is where MediaRemoteService looks first.
+cp "$REPO_ROOT/Vendor/build/mediaremote-adapter.pl" "$APP_BUNDLE/Contents/Resources/" || {
+  echo "error: failed to copy mediaremote-adapter.pl into bundle" >&2
+  exit 1
+}
+cp -R "$REPO_ROOT/Vendor/build/MediaRemoteAdapter.framework" "$APP_BUNDLE/Contents/Resources/" || {
+  echo "error: failed to copy MediaRemoteAdapter.framework into bundle" >&2
+  exit 1
+}
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -97,6 +117,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Tempo controls Spotify via AppleScript to read now-playing track info and drive playback (play, pause, previous, next).</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Tempo shows a brief notice in the notch when a Bluetooth device connects or disconnects. It never pairs, configures or transfers data.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Tempo captures Spotify's audio output solely to animate the notch visualizer; audio is never recorded or stored.</string>
 </dict>

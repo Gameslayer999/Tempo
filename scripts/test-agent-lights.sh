@@ -1,6 +1,7 @@
 #!/bin/bash
 # Verify what the agent lights actually show — the reconciliation of decision
-# 043, the unread light of 044 and the shared finish signal of 045 — against
+# 043, the unread light of 044, the shared finish signal of 045 and the
+# attention-first row order of 047 — against
 # fixture directories.
 #
 # The status file records hook *events*, so a turn the user interrupts leaves a
@@ -177,6 +178,13 @@ func phase1() {
     check("clean finish is unread", String(light("D")?.unread ?? false), "true")
     check("clean finish -> the pill dot is white", summary("D"), "finished")
 
+    // 047: the rows a glance is looking for come first — blocked and errored,
+    // then a finish nobody has acknowledged, then running, then idle — so the
+    // three rows the panel shows without scrolling are the three worth seeing.
+    check("attention rows sort above the rest",
+          state.sessions.map { \$0.id }.joined(separator: ","),
+          "F,D,J,B,C,E,H,A,G,I")
+
     // 045: clicking the row clears *both* finished flags, so the pill above the
     // panel can never stay white over a row the click has already greyed.
     if let d = light("D") { state.acknowledgeFinish(d) }
@@ -219,7 +227,7 @@ while IFS= read -r f; do SOURCES+=("$f"); done < <(
 swiftc -o "$FIX/fixtest" "${SOURCES[@]}" "$FIX/AgentStatusService.swift" "$FIX/main.swift"
 
 status=0
-echo "— reconciliation (043), the unread light (044), one finish one light (045) —"
+echo "— reconciliation (043), unread (044), one finish one light (045), row order (047) —"
 python3 "$FIX/fixture.py" "$FIX" 1 && "$FIX/fixtest" 1 || status=1
 echo "— the listing subprocess is not spawned when it cannot matter —"
 python3 "$FIX/fixture.py" "$FIX" 2 && "$FIX/fixtest" 2 || status=1

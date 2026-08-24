@@ -9,6 +9,11 @@ final class AppState: ObservableObject {
     /// Mouse currently within the active (strip or full-panel) region.
     @Published var isHovered = false
     @Published var nowPlaying: NowPlaying? = nil
+    /// `spotify:track:…` URI for the current track, and only when Spotify is
+    /// the source. MediaRemote reports a per-playback `contentItemIdentifier`
+    /// that is not a Spotify URI, so add-to-playlist still needs this one
+    /// AppleScript round-trip (decision 049). Owned by `MusicService`.
+    @Published var spotifyTrackURI: String? = nil
     @Published var artwork: NSImage? = nil {
         didSet { artworkTint = artwork?.dominantColor() }
     }
@@ -18,10 +23,11 @@ final class AppState: ObservableObject {
     @Published private(set) var artworkTint: NSColor? = nil
     /// Whether the media UI (album cover, visualizer, transport controls,
     /// playlist row) is shown at all. False when nothing has actually played
-    /// for `MusicService.mediaIdleTimeout` — a paused-and-forgotten Spotify,
-    /// or Spotify not running — so the collapsed pill shrinks back to the bare
-    /// notch instead of parking a grey placeholder and a frozen visualizer
-    /// over the desktop (decision 038). Owned by `MusicService`.
+    /// for `MediaRemoteService.mediaIdleTimeout` — a paused-and-forgotten
+    /// player, or no player at all — so the collapsed pill shrinks back to the
+    /// bare notch instead of parking a grey placeholder and a frozen
+    /// visualizer over the desktop (decision 038). Owned by
+    /// `MediaRemoteService`.
     @Published var isMediaActive = false
     /// Live playback position for the progress bar (decision 041). Stored as
     /// an *anchor* — a position and the instant it was true — rather than a
@@ -30,6 +36,12 @@ final class AppState: ObservableObject {
     /// (a notification, a poll, a seek) touches state.
     @Published var progress: PlaybackProgress? = nil
     @Published var sessions: [AgentSession] = []
+    /// Token and timing figures per session id, read from Claude Code's own
+    /// transcripts by `SessionStatsService` (decision 048). Keyed separately
+    /// from `sessions` rather than folded into `AgentSession` because the two
+    /// come from different files on different cadences, and because the module
+    /// can be switched off — an empty map is simply a row with no figures.
+    @Published var sessionStats: [String: SessionStats] = [:]
     /// Finished turns the user has already looked at (decision 044), keyed by
     /// session id and the finish that was acknowledged — so the *next* turn a
     /// session finishes lights its row again. App-local and in-memory: it holds
@@ -70,30 +82,37 @@ final class AppState: ObservableObject {
     /// notch geometry is re-read (decision 037). Nothing reads the value —
     /// publishing it is what makes ContentView evaluate its body again and
     /// pick up the new `NotchGeometry` widths.
+    /// True while a file drag is inside the notch's activation region
+    /// (decision 051). Expands the panel like a hover does, so the user can
+    /// drop without first parking the drag to open it.
+    @Published var isDragTargeting = false
+
     @Published var screenGeneration: UInt = 0
 
     /// What the UI actually shows: expanded if either pinned by a click or
     /// currently hovered.
-    var displayedExpanded: Bool { isExpanded || isHovered }
+    var displayedExpanded: Bool { isExpanded || isHovered || isDragTargeting }
 }
 
 struct NowPlaying: Equatable {
     var track: String
     var artist: String
     var album: String
-    var trackID: String      // spotify:track:… URI
-    var artworkURL: String
+    /// Bundle id of the app MediaRemote reports as the now-playing source
+    /// (`com.spotify.client`, `com.apple.Music`, `com.google.Chrome`, …).
+    /// Empty when the player did not report one.
+    var sourceBundleID: String
     var isPlaying: Bool
+
+    var isSpotify: Bool { sourceBundleID == "com.spotify.client" }
 }
 
 /// Where playback is in the current track, as of `anchorDate`.
 ///
-/// Units: everything here is **seconds**. Spotify reports `player position` in
-/// seconds but `duration` in *milliseconds* — despite its own `.sdef`
-/// documenting duration as "The length of the track in seconds" (observed
-/// 2026-08-22: a 3:26 track reports 206440; Agent Guideline #4 — observed
-/// behaviour wins over the dictionary). The conversion happens once at each
-/// parse site in `MusicService` so nothing downstream carries that trap.
+/// Units: everything here is **seconds**. MediaRemote reports microseconds
+/// (`durationMicros`, `elapsedTimeMicros`) and an absolute epoch timestamp for
+/// the measurement; the conversion happens once, in `MediaRemoteService`, so
+/// nothing downstream carries that trap.
 struct PlaybackProgress: Equatable {
     var duration: TimeInterval
     var anchorPosition: TimeInterval
@@ -148,6 +167,54 @@ struct AgentSession: Identifiable, Equatable {
     /// panel draws as a white light (decision 044). Derived each poll from
     /// `hasOutput`, the session being idle, and `AppState.acknowledgedFinish`.
     var unread: Bool = false
+}
+
+/// What one session's transcript says about its spend and pace (decision 048).
+/// Every field is a number or a timestamp — no message content reaches here
+/// (Agent Guideline #5).
+struct SessionStats: Equatable {
+    /// Tokens live in the context window as of the last main-chain assistant
+    /// message: fresh input + cache writes + cache reads. Shown absolutely
+    /// rather than as a percentage, because the transcript records the model as
+    /// `claude-opus-5` with no marker for which context window it was opened
+    /// with — a session on this machine peaked at 460k, so a bar scaled to 200k
+    /// would read "230% full" (UI Principle #4).
+    var contextTokens: Int
+    /// Everything the session has spent: fresh input + cache writes + output,
+    /// summed over every assistant message including subagents'.
+    var sessionTokens: Int
+    /// When the turn now running started, or nil between turns.
+    var turnStart: Date?
+    /// What the last completed turn took, as Claude Code measured it.
+    var lastTurnDuration: TimeInterval?
+
+    /// How long to show on the row at `date`: the running turn's live elapsed
+    /// time, else the last completed turn's duration, else nothing.
+    func elapsed(at date: Date) -> TimeInterval? {
+        if let turnStart { return max(0, date.timeIntervalSince(turnStart)) }
+        return lastTurnDuration
+    }
+
+    /// Whether `elapsed` is currently counting up, which is what tells the row
+    /// to keep a 1Hz clock running instead of drawing a static figure.
+    var isTiming: Bool { turnStart != nil }
+
+    /// "812" / "77k" / "1.2M" — three characters of magnitude, because the row
+    /// has room for a magnitude and not for a digit-exact count.
+    static func compactTokens(_ tokens: Int) -> String {
+        if tokens < 1_000 { return "\(tokens)" }
+        if tokens < 1_000_000 { return "\(tokens / 1_000)k" }
+        return String(format: "%.1fM", Double(tokens) / 1_000_000)
+    }
+
+    /// "8s" / "2m14s" / "1h04m". Seconds are dropped past an hour — at that
+    /// scale they are noise, and the field would otherwise widen the cluster.
+    static func compactDuration(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        if total < 60 { return "\(total)s" }
+        if total < 3_600 { return "\(total / 60)m\(String(format: "%02d", total % 60))s" }
+        return "\(total / 3_600)h\(String(format: "%02d", (total % 3_600) / 60))m"
+    }
 }
 
 /// One-glance rollup of every live session, for the collapsed pill's summary

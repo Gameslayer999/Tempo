@@ -408,19 +408,28 @@ final class AgentStatusService: ObservableObject {
         return String(flattened.prefix(120))
     }
 
-    /// Attention states first (blocked, error), then running, then idle;
-    /// alphabetical by label within a group. Unrecognized states sort last.
+    /// Everything the user has to act on floats to the top, in the same
+    /// precedence the collapsed pill's summary dot uses (`AgentSummary`), so
+    /// the row a glance at the pill sends you looking for is the first row in
+    /// the list: blocked and error, then a finished turn nobody has
+    /// acknowledged, then running, then idle. Alphabetical by label within a
+    /// group; unrecognized states sort last.
+    ///
+    /// A finished turn ranks above `running` even though its state really is
+    /// `idle` — it is the one row waiting on the user, and it used to sit at
+    /// the bottom of the idle bucket where the three-row list scrolled it out
+    /// of sight (decision 047).
     private static func sort(_ sessions: [AgentSession]) -> [AgentSession] {
-        func rank(_ state: String) -> Int {
-            switch state {
+        func rank(_ session: AgentSession) -> Int {
+            switch session.state {
             case "blocked", "error": return 0
-            case "running": return 1
-            case "idle": return 2
-            default: return 3
+            case "running": return 2
+            case "idle": return session.justFinished || session.unread ? 1 : 3
+            default: return 4
             }
         }
         return sessions.sorted { a, b in
-            let (ra, rb) = (rank(a.state), rank(b.state))
+            let (ra, rb) = (rank(a), rank(b))
             if ra != rb { return ra < rb }
             if a.label != b.label { return a.label.localizedStandardCompare(b.label) == .orderedAscending }
             return a.id < b.id

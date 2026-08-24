@@ -169,12 +169,16 @@ struct PlaylistSection: View {
         .opacity(canAdd ? 1 : 0.35)
     }
 
+    /// Add-to-playlist is a Spotify Web API call, so it needs the Spotify
+    /// track URI — which exists only while Spotify is the thing playing
+    /// (decision 049). Playing from any other app leaves the row visible but
+    /// disabled rather than silently doing nothing.
     private var canAdd: Bool {
-        state.nowPlaying != nil && selectedPlaylistID != nil
+        state.spotifyTrackURI != nil && selectedPlaylistID != nil
     }
 
     private func addCurrentTrack() {
-        guard let trackID = state.nowPlaying?.trackID, let playlistID = selectedPlaylistID else { return }
+        guard let trackID = state.spotifyTrackURI, let playlistID = selectedPlaylistID else { return }
         isAdding = true
         Task {
             let ok = await api.add(trackURI: trackID, toPlaylist: playlistID)

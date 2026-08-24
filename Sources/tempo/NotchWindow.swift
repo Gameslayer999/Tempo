@@ -94,6 +94,28 @@ enum NotchGeometry {
     /// Expanded panel, and therefore the (never resized) window width.
     static var panelWidth: CGFloat { notchWidth + sidePadding * 2 }
 
+    /// How far outside the collapsed pill a file drag still counts as
+    /// heading for the notch. The notch should *attract* a drag rather than
+    /// demand pixel accuracy — the user aims at the top of the screen, not at
+    /// a 32pt strip (decision 051).
+    static let dragActivationMargin: CGFloat = 80
+
+    /// Screen-coordinate region (origin bottom-left, matching
+    /// `NSEvent.mouseLocation`) in which a dragged file opens the shelf.
+    /// Recomputed per event so it follows the notch across displays
+    /// (decision 037).
+    static var dragActivationRegion: NSRect {
+        let screen = screenFrame
+        let width = pillWidth + dragActivationMargin * 2
+        let height = notchHeight + dragActivationMargin
+        return NSRect(
+            x: screen.midX - width / 2,
+            y: screen.maxY - height,
+            width: width,
+            height: height
+        )
+    }
+
     static var screenFrame: NSRect {
         targetScreen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
     }

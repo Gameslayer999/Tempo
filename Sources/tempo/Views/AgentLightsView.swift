@@ -10,6 +10,10 @@ import SwiftUI
 /// (Agent Guideline #3, UI Principle #1).
 struct AgentLightsView: View {
     var sessions: [AgentSession]
+    /// Token and timing figures per session id (decision 048), empty when the
+    /// module is off or a session's transcript has not been found. A row with
+    /// no entry here simply draws without figures.
+    var stats: [String: SessionStats]
     /// Called with the clicked session. The panel's collapse lives with the
     /// caller (ContentView), which owns the expansion state.
     var onFocus: (AgentSession) -> Void
@@ -40,7 +44,7 @@ struct AgentLightsView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: Self.rowSpacing) {
                         ForEach(sessions) { session in
-                            AgentLight(session: session, onFocus: onFocus)
+                            AgentLight(session: session, stats: stats[session.id], onFocus: onFocus)
                         }
                     }
                 }
@@ -64,6 +68,7 @@ struct AgentLightsView: View {
 /// and the same ≥28pt hit target.
 private struct AgentLight: View {
     var session: AgentSession
+    var stats: SessionStats?
     var onFocus: (AgentSession) -> Void
 
     @State private var pulse = false
@@ -87,7 +92,8 @@ private struct AgentLight: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
-                Spacer(minLength: 0)
+                Spacer(minLength: 4)
+                if let stats { StatsCluster(stats: stats) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -111,6 +117,14 @@ private struct AgentLight: View {
         var text = "Go to \(session.label)"
         if !session.task.isEmpty { text += " — \(session.task)" }
         if session.unread { text += " (finished — click to mark as seen)" }
+        if let stats {
+            text += "\ncontext \(SessionStats.compactTokens(stats.contextTokens))"
+                + " · session \(SessionStats.compactTokens(stats.sessionTokens))"
+            if let elapsed = stats.elapsed(at: Date()) {
+                text += " · \(stats.isTiming ? "running" : "last turn") "
+                    + SessionStats.compactDuration(elapsed)
+            }
+        }
         return text
     }
 
@@ -146,5 +160,53 @@ private struct AgentLight: View {
         case "idle": return .gray
         default: return .gray
         }
+    }
+}
+
+/// The right-hand figures on an agent row (decision 048): tokens live in the
+/// session's context, tokens the session has spent, and how long the current
+/// turn has been running — or how long the last one took.
+///
+/// Deliberately unlabelled. Three labels would cost more width than the panel
+/// has and would out-shout the task text beside them (UI Principle #1); the
+/// two token counts are told apart by weight instead — the live one is the
+/// brighter — and the row's tooltip names all three.
+private struct StatsCluster: View {
+    let stats: SessionStats
+
+    /// The elapsed figure is the only thing here that changes between polls, so
+    /// only it runs on a clock, and only while a turn is actually running: a
+    /// row showing a finished turn's duration is static text.
+    var body: some View {
+        HStack(spacing: 4) {
+            figure(SessionStats.compactTokens(stats.contextTokens), dim: false)
+            separator
+            figure(SessionStats.compactTokens(stats.sessionTokens), dim: true)
+            if stats.isTiming {
+                separator
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    figure(SessionStats.compactDuration(stats.elapsed(at: context.date) ?? 0), dim: false)
+                }
+            } else if let last = stats.lastTurnDuration {
+                separator
+                figure(SessionStats.compactDuration(last), dim: true)
+            }
+        }
+        .font(.system(size: 10).monospacedDigit())
+        .lineLimit(1)
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "context \(stats.contextTokens) tokens, "
+            + "\(stats.sessionTokens) tokens spent"
+        )
+    }
+
+    private var separator: some View {
+        Text("·").foregroundColor(.secondary.opacity(0.35))
+    }
+
+    private func figure(_ text: String, dim: Bool) -> some View {
+        Text(text).foregroundColor(.secondary.opacity(dim ? 0.55 : 1))
     }
 }

@@ -6,6 +6,11 @@
 # Build artifacts (app bundle packaging — scripts/make-app.sh)
 dist/
 
+# Build artifacts (vendored MediaRemote adapter — scripts/build-media-adapter.sh)
+# The *source* under Vendor/mediaremote-adapter IS checked in; only the
+# compiled framework it produces is not.
+Vendor/build/
+
 # Claude Code session state (agent worktrees etc.) — never source
 .claude/
 

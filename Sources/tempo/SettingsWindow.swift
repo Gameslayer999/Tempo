@@ -18,10 +18,12 @@ final class SettingsWindowController {
     private var window: NSWindow?
     private let prefs: Preferences
     private let api: SpotifyWebAPI
+    private let state: AppState
 
-    init(prefs: Preferences, api: SpotifyWebAPI) {
+    init(prefs: Preferences, api: SpotifyWebAPI, state: AppState) {
         self.prefs = prefs
         self.api = api
+        self.state = state
     }
 
     func show() {
@@ -61,7 +63,7 @@ final class SettingsWindowController {
         // app, which the notch panel is reachable from.
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.minSize = NSSize(width: 580, height: 360)
-        window.contentView = NSHostingView(rootView: SettingsView(prefs: prefs, api: api))
+        window.contentView = NSHostingView(rootView: SettingsView(prefs: prefs, api: api, state: state))
         window.setFrameAutosaveName("TempoSettingsWindow")
         window.center()
         return window

@@ -12,7 +12,7 @@
 | # | Date | Decision | Status |
 |---|------|----------|--------|
 | 001 | 2026-08-19 | Stack: native SwiftUI/AppKit built with SwiftPM (`swift build`), no Xcode project, no Tauri | Accepted |
-| 002 | 2026-08-19 | Music signal & transport: AppleScript to the Spotify desktop app (not the private MediaRemote framework) | Amended by 015 |
+| 002 | 2026-08-19 | Music signal & transport: AppleScript to the Spotify desktop app (not the private MediaRemote framework) | Amended by 015, reversed by 049 |
 | 003 | 2026-08-19 | Add-to-playlist: Spotify Web API with OAuth 2.0 PKCE, user-supplied Client ID, loopback redirect | Accepted |
 | 004 | 2026-08-19 | Visualizer v1: playback-synced animated bars (no system-audio capture) | Superseded by 016 (kept as fallback) |
 | 005 | 2026-08-19 | AgentStatus integration: read-only consumer of AgentStatus's existing status files; Tempo installs no hooks | Accepted |
@@ -56,6 +56,13 @@
 | 043 | 2026-08-22 | Lights reconcile against Claude Code's own view: an interrupted turn greys, a background job's light says what Claude Code says — reads `~/.claude/sessions` and `claude agents --json`, both read-only — amends 005 | Accepted |
 | 044 | 2026-08-22 | The expanded panel's rows show a white **unread** light for a finished turn nobody has looked at, cleared by the click that goes to the session; derived from `detail`'s emptiness, kept out of the collapsed pill — amends 005/042 | Accepted |
 | 045 | 2026-08-22 | One finish, one light: the collapsed pill's white dot stops pulsing and reads `unread` as well as `justFinished`, and acknowledging a row clears both flags — fixes a white pill over a grey row — amends 042/044 | Accepted |
+| 046 | 2026-08-22 | The panel-style picker previews itself: four mini panels drawn in the real style over a synthetic desktop, replacing the text menu — amends 030 | Accepted |
+| 047 | 2026-08-22 | The agent rows sort attention-first — blocked/error, then an unacknowledged finish, then running, then idle — so the three rows the panel shows without scrolling are the ones that want the user; matches the collapsed pill's precedence — amends 005/044 | Accepted |
+| 048 | 2026-08-22 | Token and timing figures on the agent rows — context, spend and turn length read incrementally from Claude Code's own transcripts (read-only, numbers only, byte-cursored); context shown absolutely because the window size is not recorded; no dollar figure, because no cost is — amends 005 | Accepted |
+| 049 | 2026-08-22 | Now-playing & transport move to the private MediaRemote framework via an entitled `/usr/bin/perl` trampoline, covering every player; Spotify AppleScript is kept only for the track URI add-to-playlist needs — amends 002/015/041 | Accepted |
+| 050 | 2026-08-22 | Audio output: switch the default device and set its volume through the Core Audio HAL; Tempo never joins the render path (no aggregate devices, no per-app routing) — and listeners use the C-proc API, not the block API | Accepted |
+| 051 | 2026-08-22 | File shelf: a global drag monitor opens the notch as a drop target when a dragged file comes near, and the shelf keeps a copy that can be dragged back out | Accepted |
+| 052 | 2026-08-22 | Bluetooth connect/disconnect notices are built but dormant: IOBluetooth blocks forever on this machine because CoreBluetooth never powers on for the process, so the service is confined to a dedicated thread and left unwired | Deferred |
 
 ---
 
@@ -2550,3 +2557,526 @@ a clean finish lights the pill dot white; an `unread` session alone lights it to
 (the case that used to go dark after 20s); acknowledging clears `justFinished`
 with `unread`, takes the pill dot out with the row, and keeps it out across the
 polls still inside the finished window.
+---
+
+## 046 — The panel-style picker shows the panel (amends 030)
+
+**Date:** 2026-08-22 · **Status:** Accepted
+
+**Context.** Decision 030 shipped the four panel materials behind a plain
+`Picker` of four names plus a sentence of prose. The names are the problem:
+"Regular glass" versus "Clear glass" versus "Album tint" is a distinction you
+can only settle by choosing one, closing Settings, hovering the notch, and
+going back — three of the four differ *only* in how translucent they are.
+Requested: show what each one looks like at the point of choosing.
+
+### Options
+
+| Option | Verdict |
+| --- | --- |
+| **Four selectable mini panels, drawn in the real style over a synthetic desktop** | **Chosen** — the picker answers its own question, and the swatch is the same layer stack as the panel |
+| Keep the menu, add a single large live preview of the current selection | Rejected — still one style at a time, so comparing two is the same round trip |
+| Keep the menu, add screenshots of each style | Rejected — a bitmap can't carry the album tint or the current appearance, and it drifts from the panel the first time the panel changes |
+| Live-apply on hover over the menu row | Rejected — flickers the real notch while the pointer crosses a menu, and it is invisible if the panel isn't on screen |
+
+### Decision
+
+**Each style is picked by clicking a miniature of the panel drawn in that
+style** (`PanelStylePreview`, in the "Expanded panel" section of General).
+
+- **Same layer stack as the panel.** The mini panel repeats
+  `ContentView.backgroundShape` exactly — `NotchShape` silhouette, 0.05 black
+  substrate, the same `glassLayer`/`Glass` switch, the clear-glass 0.22 scrim,
+  the black top blend, the rim stroke masked off the top. Not an approximation
+  of the panel's look: the same code path, so it cannot drift into showing a
+  material the panel doesn't draw (UI Principle #4).
+- **A synthetic desktop behind it, and it is load-bearing.** SwiftUI materials
+  and `glassEffect` sample what is drawn behind them in the same window. Over
+  the Settings window's flat background all three glass styles would look like
+  the same grey fill, so each card draws a gradient (dark top-left, bright
+  bottom-right) with an opaque white "window" over it. That is what makes
+  regular and clear visibly different in the picker.
+- **The real album tint, live.** The `.tinted` card uses `AppState.artworkTint`
+  — the actual dominant colour of what is playing right now — and falls back to
+  plain glass with no artwork, exactly as the panel does. `SettingsView` takes
+  `AppState` as a plain `let`, not an `@ObservedObject`: Settings has no reason
+  to redraw on every playback or session publish, so it tracks the one value it
+  needs through `objectWillChange`.
+- **Shorthand contents, never text.** Cover square, two title bars, three
+  transport dots and a green/orange pair for the agent lights. At 104×74 real
+  strings would be unreadable noise; the shapes are enough to read it as the
+  panel.
+
+### Implementation
+
+- `Sources/tempo/Views/PanelStylePreview.swift` — new; the mini panel.
+- `SettingsView.swift` — `GeneralPane` replaces the `Picker` with a row of four
+  preview buttons; new `state: AppState` on `SettingsView`.
+- `SettingsWindow.swift`, `AppDelegate.swift` — pass `AppState` through to
+  Settings.
+
+### Verification
+
+Rendered all four styles at both tint states in a throwaway harness to check the
+geometry and content, then in the running app: `swift build`, then
+`scripts/make-app.sh`, and the picker checked against the panel it opens.
+
+---
+
+## 047 — The agent rows sort attention-first (amends 005, 044)
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+### Context
+
+The expanded panel shows three agent rows at once and scrolls the rest
+(decision 040's cap, kept so a busy machine cannot grow the panel without
+bound). Which three you get is decided by the row sort, and that sort ranked
+sessions on the `state` string alone: blocked and error first, then running,
+then idle.
+
+A finished turn is idle. So the one row that most often wants the user — the
+white "finished, and you haven't looked at it" light of decisions 044/045 — sat
+in the idle bucket at the *bottom* of the list, below every running session.
+On a machine with four or five sessions running, the finish that just landed
+was off-screen until the user scrolled to it, which is exactly the signal the
+white light exists to make un-missable (UI Principle #2). The collapsed pill
+already got this right: `AgentSummary` ranks `finished` above `running`, so the
+pill would go white and then send the user to a list where the row it was
+telling them about was not visible.
+
+### Options considered
+
+| Option | Verdict |
+| --- | --- |
+| **Rank an unacknowledged finish above running, matching `AgentSummary`'s precedence** | **Chosen** — the pill and the list agree about what is most worth looking at, and the fix is in the one comparator that already owns row order |
+| Raise the visible-row cap so everything fits | Rejected — trades a bounded panel for an unbounded one, and still buries the important row *within* the list on a busy machine |
+| Pin attention rows outside the scroll view, scroll the rest under them | Rejected — two lists and a second layout for the same rows, to solve what an ordering change solves |
+| Leave the order, mark scrolled-away attention rows on the scroll bar | Rejected — adds chrome to point at a row instead of just showing the row (UI Principle #1) |
+
+### Decision
+
+**Row order follows attention, in the same precedence the collapsed pill uses.**
+`AgentStatusService.sort` now ranks the session, not just its state string:
+
+| Rank | Rows |
+| --- | --- |
+| 0 | `blocked`, `error` — the user has to act |
+| 1 | `idle` **and** (`justFinished` \|\| `unread`) — a finish nobody has acknowledged |
+| 2 | `running` |
+| 3 | plain `idle` |
+| 4 | unrecognized states |
+
+Alphabetical by label within a rank, then by id — unchanged. Both finish flags
+are read, the same pair `AgentSummary.finished` reads (045), so the pill and the
+first row can never be telling the user about different sessions.
+
+Rows move when their rank changes: a finish jumps to the top, and the click that
+acknowledges it drops it back into the idle group as the light goes out. That
+movement is the feature — the list is ordered by what wants the user *now*.
+
+### Implementation
+
+- `AgentStatusService.sort(_:)`: `rank` takes an `AgentSession` instead of a
+  `String`, so it can see the finish flags; ranks renumbered to open a slot
+  between `blocked`/`error` and `running`.
+
+Nothing else changed: `AgentLightsView` still draws whatever order it is handed,
+the three-row cap stands, and no new state is read from `~/.claude/status/**`
+(Guideline #3).
+
+### Verification
+
+`scripts/test-agent-lights.sh` — 31 checks, all passing. New for this decision:
+a fixture of ten sessions (one blocked, two unacknowledged finishes, four
+running, three idle) comes out of the service ordered blocked → finished →
+running → idle, so the two finishes sit above the running sessions instead of
+below them.
+
+---
+
+## 048 — Token and timing figures on the agent rows, read from Claude Code's transcripts (amends 005)
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+### Context
+
+The agent rows say *which* sessions are alive and *what* each is doing, but
+nothing about their cost or pace. The two questions a glance at a row cannot
+currently answer are "is this one about to run out of context?" and "has this
+been stuck for two minutes or twenty?".
+
+AgentStatus's status files cannot answer either. Verified against the installed
+writer (Agent Guideline #4): a session file carries `state`, `cwd`, `ide`,
+`pid`, `label`, `updated_at`, `task`, `detail` — no counts, no durations.
+
+Claude Code keeps the numbers itself, in the transcript it writes for every
+session at `~/.claude/projects/<slug>/<session_id>.jsonl`, keyed by the same
+session id the status file is named after. Read on this machine (CC 2.1.240,
+18 transcripts):
+
+| Figure | Where it is |
+| --- | --- |
+| Context occupancy | an assistant entry's `usage`: `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` |
+| Spend | the same entries' `input_tokens + cache_creation_input_tokens + output_tokens`, summed |
+| Turn start | a `user` entry carrying `promptSource` — the unmarked ones are tool results |
+| Turn length | a `system` entry with `"subtype":"turn_duration"` and `durationMs`, written at the turn boundary |
+
+**Cost in dollars is not recorded anywhere** — no `costUSD`, no total. It could
+only be produced by multiplying tokens against a price table that depends on the
+user's plan and on how cache reads are billed, so Tempo would be publishing a
+guess as a number. It is not shown.
+
+### Options considered
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Leave the rows as they are | no new data source | the two questions above stay unanswered |
+| Ask `claude` for the figures | one source, already used for 043 | no such command exists; the listing carries no usage |
+| Read the transcripts | the real numbers, same session id, no new permission | a second tree to read, and files that reach megabytes |
+
+### Decision
+
+**Read the transcripts**, in a `SessionStatsService` separate from
+`AgentStatusService`, publishing `AppState.sessionStats` keyed by session id.
+Each row gains a right-aligned cluster: **context · spend · turn length**.
+
+Four things make that safe to do on a 2s poll:
+
+1. **Incremental reads.** Transcripts are append-only and reach 2.4MB here, so
+   a poll never re-reads one: each session keeps a byte offset and reads only
+   what was appended (typically a few KB). A file shorter than its cursor was
+   rewritten, so its totals reset with it rather than continuing from a file
+   that no longer exists.
+2. **Only complete lines are consumed.** A poll can land mid-append; the
+   trailing fragment is left for the next poll to read whole rather than parsed
+   truncated and dropped.
+3. **Numbers only.** Usage counts, timestamps and `durationMs` are the only
+   fields read out of a decoded line — never message content, prompt text or
+   tool output, and nothing is stored or logged (Agent Guideline #5). A
+   substring test in front of the JSON parse skips the tool-result lines
+   entirely, which is most of a transcript.
+4. **Off means off.** The figures are a Modules toggle
+   (`Preferences.showAgentStats`), gated together with the lights themselves:
+   switched off, the service stops and drops every cursor, so no transcript is
+   opened at all — the same contract `SystemStatsService.stop()` has for the
+   usage graph.
+
+**Context is absolute (`125k`), never a percentage.** The transcript records the
+model as `claude-opus-5` with no marker for which context window the session was
+opened with, and a session on this machine peaked at **460,201 tokens** — a bar
+scaled to 200k would have read "230% full". A number that cannot lie beats a
+percentage that can (UI Principle #4).
+
+**Context excludes subagents; spend includes them.** A subagent runs its own
+window, so counting its messages into the context figure would make the number
+jump on every fan-out — but its tokens are still this session's spend.
+
+The cluster is unlabelled. Three labels cost more width than the panel's 368pt
+of content has, and would out-shout the task text beside them (UI Principle #1);
+the two token counts are told apart by weight — the live one is brighter — and
+the row's tooltip names all three.
+
+### Reasoning
+
+Everything needed is already on disk, written by the tool whose sessions the
+lights are about, under a session id Tempo already has. The alternative is no
+answer at all. The read is bounded by a byte cursor rather than by file size, it
+is read-only on a tree Tempo does not own (Agent Guideline #3), and it decodes
+strictly less about a session than the `task` excerpt the row already renders.
+
+Verified by `scripts/test-session-stats.sh` — subagent exclusion, incremental
+append, a mid-append fragment, and a rewritten file — and cross-checked against
+a live transcript, where the service and an independent computation agreed
+exactly (`ctx=125059`, `spend=581791`).
+
+---
+
+## 049 — Now-playing and transport move to MediaRemote, for every player (amends 002/015/041, reverses 002)
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+### Context
+
+Decision 002 chose AppleScript to the Spotify desktop app and explicitly
+rejected the private MediaRemote framework. That was the right call then: on
+macOS 15.4 Apple restricted `MRMediaRemoteGetNowPlayingInfo` and friends to
+processes carrying an entitlement no third-party app can obtain, so MediaRemote
+simply returned nothing.
+
+The consequence is that Tempo is blind to everything except Spotify. Music
+playing in Apple Music, a YouTube video in a browser, a podcast in Overcast —
+the notch shows nothing and the panel says "Nothing playing".
+
+The restriction has a documented, widely-used way around it. `/usr/bin/perl` is
+Apple-signed and *is* entitled to use MediaRemote, and it can `dlopen` an
+arbitrary dylib. `ungive/mediaremote-adapter` (BSD 3-Clause) is a small
+Objective-C framework plus a perl loader built exactly for this: perl loads the
+framework, the framework talks to MediaRemote, and results come back as
+newline-delimited JSON on stdout.
+
+**Verified live on this machine before any code was written** (Agent Guideline
+#4), macOS 26.6.1:
+
+- The entitlement holds. `get` returned real metadata for **Google Chrome**
+  (a YouTube video) and for **Spotify** — two sources, one of which the old
+  path could never see.
+- `stream --debounce=100 --micros` pushes a diff frame within ~0.5s of every
+  play/pause.
+- **A seek made inside the player is pushed too.** Seeking Spotify externally
+  to 30s and then 90s produced two frames carrying the new `elapsedTimeMicros`
+  and a fresh `timestampEpochMicros`.
+- Every field Tempo renders is present: `title`, `artist`, `album`,
+  `artworkData` (base64 JPEG), `durationMicros`, `elapsedTimeMicros`,
+  `timestampEpochMicros`, `playing`, `bundleIdentifier`, `processIdentifier`.
+
+### Options considered
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Keep Spotify-only AppleScript | no dependency, no workaround | blind to every other player; the notch is empty most of the day |
+| Add an AppleScript path per app | no private API | only scriptable apps qualify — browsers and most players are not; N dictionaries to verify and maintain |
+| MediaRemote via the perl trampoline | every player, event-driven, richer data than AppleScript gives | a vendored dependency, a child process, and a workaround Apple could close |
+
+### Decision
+
+Adopt the MediaRemote adapter as the single source of now-playing state and
+transport, for every player.
+
+- The adapter source is **vendored** at `Vendor/mediaremote-adapter` (BSD
+  3-Clause, `LICENSE` and pinned `COMMIT` retained, local modifications
+  recorded in `VENDORED.md`) so builds need no network and cannot drift.
+- `scripts/build-media-adapter.sh` compiles it with `clang` rather than the
+  upstream CMake, because the perl loader only needs
+  `<Name>.framework/<Name>` to be a Mach-O dylib exporting the `adapter_*`
+  symbols — not a full versioned bundle. That keeps the repo's tooling
+  requirement at the Xcode command line tools. The script **verifies the
+  entitlement by running the real `get` command** and fails loudly if macOS has
+  closed the door, so this breaks at build time rather than as a silently empty
+  notch.
+- `scripts/make-app.sh` builds the adapter first and copies both files into
+  `Contents/Resources`.
+
+**Spotify AppleScript is kept for exactly one value.** MediaRemote identifies a
+track only by `contentItemIdentifier`, which is a per-playback UUID — observed
+live changing three times for the same song across three seeks. Add-to-playlist
+needs the stable `spotify:track:…` URI, so `MusicService` shrinks from 557
+lines to ~130 whose only job is to publish `state.spotifyTrackURI`, taken free
+from Spotify's `PlaybackStateChanged` notification. The playlist row is
+therefore enabled only while Spotify is the source, and disabled (not hidden,
+not silently inert) otherwise.
+
+### Consequences
+
+- **Decision 041's 1Hz panel-open reconciliation poll is removed.** It existed
+  because a seek inside Spotify posted no notification. MediaRemote pushes it,
+  verified above, so the open panel now costs **zero timers** rather than one.
+- Artwork arrives as base64 in the stream instead of a URL fetch. It is decoded
+  off the main actor and only when a fingerprint of the blob changes, so a diff
+  frame that happens to repeat the artwork costs nothing.
+- The stream is diff-based, so frames **must** be applied in order. Separate
+  `Task { @MainActor }` instances carry no ordering guarantee between them, so
+  finished lines are handed over on `DispatchQueue.main`, which is FIFO.
+- The adapter runs as a `/usr/bin/perl` child process. `applicationWillTerminate`
+  stops it; a crash is normally covered by SIGPIPE on the next write. But a
+  stream with nothing playing never writes — three orphans accumulated during
+  development on 2026-08-22 — so `start()` also reaps adapter processes that
+  are running *this* adapter path and have already been reparented to launchd.
+
+### Risk accepted
+
+This is a workaround of a restriction Apple imposed deliberately and could
+tighten again. The mitigation is that the failure is loud and localised: the
+build script tests the real entitlement, and at runtime a missing or unentitled
+adapter fails silent into "no media", exactly as Spotify-not-running already
+did. The Spotify AppleScript path remains in the tree.
+
+---
+
+## 050 — Audio output switching through the HAL; Tempo never joins the render path
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+### Context
+
+Sapphire's "advanced audio" offers per-app volume and per-app EQ from the
+notch. Its implementation creates a Core Audio process tap per app per output
+device plus an aggregate device, and applies gain and a 10-band biquad EQ in
+the render callback.
+
+Tempo already owns half of that machinery: `AudioTapService` creates a
+per-process tap on the playing app for the visualizer. But that tap is
+**passive** — it reads a copy of the audio. Changing what the user hears means
+becoming the output path: mute the app on the real device, re-render through an
+aggregate device Tempo owns. Tempo would then be load-bearing for the user's
+audio, and a crash or a force-quit mid-route means silence or a stuck aggregate
+device. That is a direct collision with Agent Guideline #3.
+
+### Options considered
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Per-app volume + EQ (Sapphire's design) | the full feature | Tempo owns the audio path; a crash costs the user their sound; shipped as Beta upstream for good reason |
+| Nothing | no risk | the panel cannot answer "send this to my headphones" |
+| Default-device switching + system volume | ~80% of the everyday use at a fraction of the risk; Tempo stays a reader | does not solve "quieten one app" |
+
+### Decision
+
+Ship device switching and system volume only. `AudioOutputService` enumerates
+output devices, reads and sets the default output device, and reads and sets
+that device's volume and mute — all through the public Core Audio HAL. **Tempo
+never creates an aggregate device, never taps for playback, and never sits in
+anyone's render path.**
+
+Devices are filtered by output channel count rather than by name, so the split
+input/output enumeration of AirPods is handled structurally: verified on this
+machine, 5 HAL devices reduced to the 2 real outputs, correctly excluding three
+input-only ones.
+
+### Reversal within this decision: listener API
+
+The obvious API, `AudioObjectAddPropertyListenerBlock`, is **broken from
+Swift** and was measured to be so on this machine. A Swift closure re-bridges
+to a fresh Objective-C block at each C call boundary, so
+`AudioObjectRemovePropertyListenerBlock` returns `noErr` while leaving the
+original listener registered — after `stop()`, external volume changes still
+mutated published state (`fired-while-registered=2, fired-after-remove=2`).
+Storing the closure as an explicit `@convention(block)` value does not help.
+
+The C-proc API (`AudioObjectAddPropertyListener`) removes by
+`(proc, clientData)` identity and works: `fired-after-remove=0`. `clientData`
+is a retained context holding a **weak** service reference, released on
+removal, so a callback racing teardown finds nil rather than a dangling
+pointer. **Any future listener code in this repo should use the C-proc API.**
+
+### Notes
+
+Some digital outputs own their own level: the LG ULTRAWIDE here answers
+`kAudioHardwareUnknownPropertyError` for both volume and mute. `volume` is
+`Float?` for that reason and the UI says so rather than rendering a dead slider
+at zero (UI Principle #4). Raising the slider on a muted device also unmutes,
+because the HAL does not treat a volume change as an unmute and the alternative
+is a control that visibly moves and changes nothing.
+
+---
+
+## 051 — File shelf: the notch opens as a drop target when a dragged file comes near
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+### Context
+
+The requested behaviour: while the user is holding a file, the notch should
+notice, expand into a place to drop it as the pointer gets close, then later
+show that it is holding something and let the file be dragged back out.
+
+macOS gives no notification that a drag session is in progress. The technique
+boringNotch uses, and the one adopted here, is to watch the **drag
+pasteboard's change count**: snapshot `NSPasteboard(name: .drag).changeCount`
+on global `.leftMouseDown`, and when it differs during `.leftMouseDragged`, a
+real drag with content has begun.
+
+**Verified: this needs no permission.** A dedicated ad-hoc-signed probe app
+with its own bundle id observed the full synthetic sequence — 1 down, 8 drags,
+1 up, with correct `NSEvent.mouseLocation` — while `AXIsProcessTrusted()`,
+`CGPreflightListenEventAccess()` and `CGPreflightPostEventAccess()` were all
+false and no TCC prompt was ever shown. Global monitors for *mouse* events are
+not gated the way keyboard events are. Handlers were also confirmed to arrive
+on the main thread.
+
+### Decision
+
+- `DragDetector` installs global monitors only while the shelf is switched on,
+  so a disabled shelf watches nothing at all.
+- The activation region comes from a **closure re-read on every event**, not a
+  rect captured at init: Tempo relocates the notch across displays (decision
+  037), and boringNotch's fixed rect would leave the shelf attached to a
+  display the notch has left.
+- The region is `pillWidth + 80pt` on each side and `notchHeight + 80pt` tall.
+  The notch should *attract* a drag; the user aims at the top of the screen,
+  not at a 32pt strip.
+- A drag inside the region sets `state.isDragTargeting`, which feeds
+  `displayedExpanded` exactly as hover does — so the panel opens on the same
+  animation path, with no second expansion mechanism.
+- The drop is accepted by the **whole panel**, not just the drawn well, so a
+  drop landing slightly off the affordance still lands in the shelf.
+- Files are **copied** into `~/Library/Application Support/Tempo/Shelf/` (dir
+  `0700`) with a JSON index beside them, so the shelf survives the original
+  being moved or deleted, and survives relaunch. The index stores the stored
+  copy's *file name, not an absolute path* — no user path is written down.
+  Duplicate names are disambiguated rather than overwritten. Files over 256 MB
+  are skipped, not truncated, and excluded from the returned count.
+
+### Deviation from the reference implementation
+
+boringNotch's detector relies on the global `.leftMouseUp` to end a drag. In a
+cross-app drag that mouse-up is consumed by the *source* application's dragging
+session and is not guaranteed to arrive, which can leave the notch stuck open
+as a drop target for a drag that already finished. A 0.2s watchdog polling
+`NSEvent.pressedMouseButtons`, running only while a content drag is live,
+closes that hole.
+
+Text drags are deliberately **not** accepted: the shelf stores files, and
+opening a drop target for a text selection would mean refusing the drop.
+
+---
+
+## 052 — Bluetooth connect/disconnect notices: built, dormant, off the main thread
+
+**Date:** 2026-08-22
+**Status:** Deferred — the platform refuses the API on this machine
+
+### Context
+
+The intent was a transient "AirPods connected" notice in the notch, using the
+public `IOBluetooth` API.
+
+**IOBluetooth does not work in this process, and the failure mode is a
+permanent hang.** Every entry point — `IOBluetoothDevice.pairedDevices()`,
+`register(forConnectNotifications:)` — funnels through
+`+[IOBluetoothCoreBluetoothCoordinator sharedInstance]`, whose `init` blocks the
+calling thread on an untimed `dispatch_semaphore_wait` that is never signalled.
+Captured twice with `sample`.
+
+The root cause, isolated with a direct `CBCentralManager` probe:
+**CoreBluetooth never powers on for this process.**
+`centralManagerDidUpdateState:` is never called, state stays `.unknown` after
+10s, and `CBManager.authorization` stays `notDetermined` — **with no TCC prompt
+ever shown**. Reproduced identically across five configurations: a bare CLI
+binary; an ad-hoc-signed `.app` carrying `NSBluetoothAlwaysUsageDescription`;
+an `.app` signed with a real keychain identity; launched directly and via
+`open`; and from both the main thread and a background thread — so it is *not*
+a main-queue self-deadlock.
+
+Bluetooth is on, with ~10 paired devices, confirmed via
+`system_profiler SPBluetoothDataType`.
+
+### Decision
+
+Keep the service, do not wire it up.
+
+- All IOBluetooth work is confined to one dedicated `Thread` with its own run
+  loop, created once per process, which is allowed to park in that semaphore
+  forever. **Calling any IOBluetooth API on the main actor would freeze Tempo
+  permanently** — this is the single most important constraint for anyone
+  touching this file. `start()` measured at 2ms with the main run loop
+  continuing to tick.
+- `NSBluetoothAlwaysUsageDescription` is added to the bundle's Info.plist so
+  the permission can be asked for at all if the platform ever allows it.
+- `batteryPercent` is always `nil`. `responds(to:)` was false for every
+  battery selector; `ioreg` showed no battery keys for any HID device. A
+  fabricated percentage would be a lying signal (UI Principle #4).
+- No UI is wired, and this is **not** described in `README.md` as a feature,
+  because it cannot produce an event today.
+
+### To revisit
+
+If a future macOS or a notarized Developer ID identity lets CoreBluetooth power
+on for Tempo, events flow with no code change and only the UI remains to be
+built. The first thing to check is whether Tempo appears in System Settings ▸
+Privacy & Security ▸ Bluetooth at all.

@@ -8,6 +8,11 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var prefs: Preferences
     @ObservedObject var api: SpotifyWebAPI
+    /// Read for one thing only: the current album's dominant colour, so the
+    /// "Album tint" preview shows the tint the panel would carry right now.
+    /// Deliberately not an `@ObservedObject` — the Settings window has no
+    /// reason to redraw on every playback or session publish.
+    let state: AppState
 
     enum Pane: String, CaseIterable, Identifiable {
         case general, music, modules, about
@@ -51,7 +56,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var detail: some View {
         switch selection ?? .general {
-        case .general: GeneralPane(prefs: prefs)
+        case .general: GeneralPane(prefs: prefs, state: state)
         case .music: MusicPane(api: api, prefs: prefs)
         case .modules: ModulesPane(prefs: prefs)
         case .about: AboutPane()
@@ -63,6 +68,9 @@ struct SettingsView: View {
 
 private struct GeneralPane: View {
     @ObservedObject var prefs: Preferences
+    let state: AppState
+
+    @State private var artworkTint: NSColor?
 
     var body: some View {
         Form {
@@ -89,13 +97,14 @@ private struct GeneralPane: View {
             }
 
             Section {
-                Picker("Expanded panel", selection: $prefs.panelStyle) {
+                HStack(alignment: .top, spacing: 10) {
                     ForEach(PanelStyle.allCases) { style in
-                        Text(style.title).tag(style)
+                        styleOption(style)
                     }
                 }
+                .padding(.vertical, 4)
             } header: {
-                Text("Appearance")
+                Text("Expanded panel")
             } footer: {
                 Text(prefs.panelStyle.detail)
                     .font(.caption)
@@ -130,6 +139,43 @@ private struct GeneralPane: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { artworkTint = state.artworkTint }
+        .onReceive(state.objectWillChange) { _ in
+            // `artworkTint` is published, but reading it in the same runloop
+            // turn as `objectWillChange` would still see the old value.
+            DispatchQueue.main.async { artworkTint = state.artworkTint }
+        }
+    }
+
+    /// One preview card: the mini panel in that style, its name under it, and
+    /// a ring when it is the chosen one. The whole card is the hit target —
+    /// clicking a style applies it to the live notch immediately, so the panel
+    /// itself is the real preview and this is only how you get there.
+    private func styleOption(_ style: PanelStyle) -> some View {
+        let isOn = prefs.panelStyle == style
+        return Button {
+            prefs.panelStyle = style
+        } label: {
+            VStack(spacing: 6) {
+                PanelStylePreview(style: style, tint: artworkTint)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(isOn ? Color.accentColor : Color.primary.opacity(0.12),
+                                    lineWidth: isOn ? 2.5 : 1)
+                    )
+                Text(style.title)
+                    .font(.caption)
+                    .foregroundColor(isOn ? .primary : .secondary)
+                    .fontWeight(isOn ? .semibold : .regular)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(style.title)
+        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -376,10 +422,14 @@ private struct ModulesPane: View {
                 Toggle("Audio visualizer", isOn: $prefs.showVisualizer)
                 Toggle("CPU and memory graphs", isOn: $prefs.showUsageGraph)
                 Toggle("Agent session lights", isOn: $prefs.showAgentLights)
+                Toggle("Token and timing figures", isOn: $prefs.showAgentStats)
+                    .disabled(!prefs.showAgentLights)
+                Toggle("Audio output and volume", isOn: $prefs.showAudioOutput)
+                Toggle("File shelf", isOn: $prefs.showFileShelf)
             } header: {
                 Text("Show in the notch")
             } footer: {
-                Text("The visualizer sits in the collapsed pill; the graphs and agent lights appear in the expanded panel. Each also hides itself automatically when it has nothing to show.")
+                Text("The visualizer sits in the collapsed pill; the graphs, agent lights, audio row and file shelf appear in the expanded panel. Each also hides itself automatically when it has nothing to show.\n\nThe figures put each session's context size, total tokens spent and turn length on its row, read from Claude Code's own transcripts. Switching them off stops those reads entirely.\n\nThe file shelf opens the notch as a drop target when you drag a file near it, and keeps a copy you can drag back out later. Switching it off stops Tempo watching for drags at all.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

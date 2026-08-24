@@ -81,7 +81,9 @@ struct NotchShape: Shape {
 ///   monitor) unpins and clears hover, collapsing it.
 struct ContentView: View {
     @ObservedObject var state: AppState
-    @ObservedObject var music: MusicService
+    @ObservedObject var media: MediaRemoteService
+    @ObservedObject var shelf: ShelfService
+    @ObservedObject var audio: AudioOutputService
     @ObservedObject var api: SpotifyWebAPI
     @ObservedObject var prefs: Preferences
     /// Opens the Settings window (SettingsWindow.swift), owned by AppDelegate.
@@ -171,7 +173,7 @@ struct ContentView: View {
 
     /// Whether the media UI is in the hierarchy at all — cover, visualizer,
     /// transport controls and the playlist row (decision 038). False once
-    /// nothing has played for `MusicService.mediaIdleTimeout`, which is what
+    /// nothing has played for `MediaRemoteService.mediaIdleTimeout`, which is what
     /// takes the collapsed pill back down to the bare notch.
     private var showsMedia: Bool { state.isMediaActive }
 
@@ -233,6 +235,11 @@ struct ContentView: View {
         }
         .frame(width: currentWidth, height: currentHeight, alignment: .top)
         .background(backgroundShape)
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            guard prefs.showFileShelf else { return false }
+            receiveDrop(providers)
+            return true
+        }
         // The only hit-testable region is the drawn silhouette: this is
         // congruent with the shape filled by `backgroundShape`, and nothing
         // else in the hierarchy spans the window (the outer `.frame` below
@@ -277,13 +284,6 @@ struct ContentView: View {
         // the collapsed width, and that has to spring like everything else
         // rather than snapping the pill wider mid-glance.
         .animation(expandAnimation, value: lightSlotWidth)
-        // The progress bar is the only thing that needs a *fresh* position,
-        // and it only exists while the panel is open — so that is exactly
-        // when the 1Hz reconciliation runs (decision 041). Collapsed, Tempo
-        // is back to its measured zero-timer rest state.
-        .onChange(of: displayedExpanded) { _, expanded in
-            music.setPanelOpen(expanded)
-        }
     }
 
     /// Collapsed: pure black, always (UI Principle #6 — must keep merging with
@@ -518,14 +518,27 @@ struct ContentView: View {
                 // is what makes the bar precise enough to scrub with
                 // (~1.7pt per second on a typical track instead of ~1.1).
                 if let progress = state.progress, progress.duration > 0 {
-                    PlaybackProgressView(progress: progress) { music.seek(to: $0) }
+                    PlaybackProgressView(progress: progress) { media.seek(to: $0) }
                 }
+            }
+            if prefs.showAudioOutput {
+                AudioOutputView(audio: audio)
+            }
+            if prefs.showFileShelf {
+                ShelfView(shelf: shelf, isDropTargeting: state.isDragTargeting)
             }
             if prefs.showUsageGraph {
                 UsageGraphView()
             }
             if prefs.showAgentLights {
-                AgentLightsView(sessions: state.sessions, onFocus: focusSession)
+                AgentLightsView(
+                    sessions: state.sessions,
+                    // Empty when the figures are switched off — the service is
+                    // stopped in that case anyway, and an empty map is exactly
+                    // "this row has no figures" (decision 048).
+                    stats: prefs.showAgentStats ? state.sessionStats : [:],
+                    onFocus: focusSession
+                )
             }
         }
         // Top-right corner of the panel content. An overlay rather than a
@@ -592,15 +605,15 @@ struct ContentView: View {
                 // the column's centre line, directly below the title.
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    Button(action: { music.previousTrack() }) {
+                    Button(action: { media.previousTrack() }) {
                         Image(systemName: "backward.fill")
                     }
                     Spacer(minLength: 0)
-                    Button(action: { music.playPause() }) {
+                    Button(action: { media.playPause() }) {
                         Image(systemName: (state.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
                     }
                     Spacer(minLength: 0)
-                    Button(action: { music.nextTrack() }) {
+                    Button(action: { media.nextTrack() }) {
                         Image(systemName: "forward.fill")
                     }
                     Spacer(minLength: 0)
@@ -678,5 +691,38 @@ struct ContentView: View {
             width: panelWidth,
             height: min(contentHeight + stripHeight, panelHeight)
         )
+    }
+}
+
+extension ContentView {
+    /// Resolves dropped providers to file URLs and hands them to the shelf.
+    ///
+    /// `loadItem` is asynchronous and answers on an arbitrary queue, so the
+    /// URLs are collected first and added in one main-actor batch — adding
+    /// them one at a time would publish `items` once per file and animate the
+    /// row N times for a single drop.
+    fileprivate func receiveDrop(_ providers: [NSItemProvider]) {
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var urls: [URL] = []
+
+        for provider in providers {
+            group.enter()
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url {
+                    lock.lock()
+                    urls.append(url)
+                    lock.unlock()
+                }
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .main) {
+            MainActor.assumeIsolated {
+                guard !urls.isEmpty else { return }
+                shelf.add(urls: urls)
+            }
+        }
     }
 }

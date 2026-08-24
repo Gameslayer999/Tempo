@@ -18,10 +18,13 @@ final class Preferences: ObservableObject {
         static let showVisualizer = "showVisualizer"
         static let showUsageGraph = "showUsageGraph"
         static let showAgentLights = "showAgentLights"
+        static let showAgentStats = "showAgentStats"
         static let collapsedAgentLight = "collapsedAgentLight"
         static let favoritePlaylists = "favoritePlaylists"
         static let panelStyle = "panelStyle"
         static let hoverExpandDelayMS = "hoverExpandDelayMS"
+        static let showFileShelf = "showFileShelf"
+        static let showAudioOutput = "showAudioOutput"
     }
 
     private let defaults: UserDefaults
@@ -34,6 +37,27 @@ final class Preferences: ObservableObject {
     }
     @Published var showAgentLights: Bool {
         didSet { defaults.set(showAgentLights, forKey: Key.showAgentLights) }
+    }
+
+    /// Whether the agent rows carry token and timing figures (decision 048).
+    /// Separate from `showAgentLights` because it is the one module that reads
+    /// a *second* data source — Claude Code's transcripts — and switching it
+    /// off must stop those reads entirely, not just hide the numbers.
+    @Published var showAgentStats: Bool {
+        didSet { defaults.set(showAgentStats, forKey: Key.showAgentStats) }
+    }
+
+    /// Whether the notch acts as a drop target for dragged files and shows
+    /// the shelf (decision 051). Off means the global mouse monitor is never
+    /// installed, so a disabled shelf watches nothing.
+    @Published var showFileShelf: Bool {
+        didSet { defaults.set(showFileShelf, forKey: Key.showFileShelf) }
+    }
+
+    /// Whether the expanded panel carries the output-device row and volume
+    /// slider (decision 050).
+    @Published var showAudioOutput: Bool {
+        didSet { defaults.set(showAudioOutput, forKey: Key.showAudioOutput) }
     }
 
     /// Shape of the agent signal in the *collapsed* pill (decision 042).
@@ -98,13 +122,19 @@ final class Preferences: ObservableObject {
             Key.showVisualizer: true,
             Key.showUsageGraph: true,
             Key.showAgentLights: true,
+            Key.showAgentStats: true,
             Key.collapsedAgentLight: CollapsedAgentLightMode.summary.rawValue,
             Key.hoverExpandDelayMS: Self.defaultHoverExpandDelayMS,
+            Key.showFileShelf: true,
+            Key.showAudioOutput: true,
         ])
         self.defaults = defaults
         showVisualizer = defaults.bool(forKey: Key.showVisualizer)
         showUsageGraph = defaults.bool(forKey: Key.showUsageGraph)
         showAgentLights = defaults.bool(forKey: Key.showAgentLights)
+        showAgentStats = defaults.bool(forKey: Key.showAgentStats)
+        showFileShelf = defaults.bool(forKey: Key.showFileShelf)
+        showAudioOutput = defaults.bool(forKey: Key.showAudioOutput)
         collapsedAgentLight = CollapsedAgentLightMode(
             rawValue: defaults.string(forKey: Key.collapsedAgentLight) ?? ""
         ) ?? .summary
