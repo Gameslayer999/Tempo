@@ -1,13 +1,23 @@
 import Accelerate
-import AppKit
 import AudioToolbox
 import CoreAudio
 import Foundation
 
 // MARK: - Tuning constants
 
-/// Bundle identifier of the only app Tempo taps.
-private let spotifyBundleID = "com.spotify.client"
+/// How long audio has to keep arriving before the strip grows a visualizer for
+/// it (decision 056). A Discord ping or a UI alert is sound, not something to
+/// listen to, and must not pop the notch's wings open; `captureHoldSeconds`
+/// already keeps `isCapturing` up for 1.5 s past a short sound, so this sits
+/// above that.
+private let audioOnsetSeconds: TimeInterval = 2
+
+/// How long the strip keeps a visualizer up after system audio goes quiet when
+/// no now-playing card is holding it there (decision 056). Long enough to ride
+/// out the gap between two YouTube videos, short enough that a finished video
+/// puts the notch back to bare. `captureHoldSeconds` alone (1.5 s) made the
+/// pill retract and grow again between clips.
+private let audioHoldSeconds: TimeInterval = 15
 
 /// Number of visualizer bands. Fixed at 5 to match `VisualizerView`.
 private let bandCount = 5
@@ -295,9 +305,10 @@ private final class TapProcessor: @unchecked Sendable {
 
 /// Real audio-reactive levels for the notch visualizer.
 ///
-/// Taps Spotify's output with a per-process Core Audio tap
-/// (`CATapDescription(stereoMixdownOfProcesses:)` at `muteBehavior = .unmuted`,
-/// so the user still hears their music) fed into a private aggregate device,
+/// Taps **all system audio output** with a global Core Audio tap
+/// (`CATapDescription(stereoGlobalTapButExcludeProcesses:)` at
+/// `muteBehavior = .unmuted`, so the user still hears everything) fed into a
+/// private aggregate device,
 /// runs a 512-point FFT per callback, and publishes five smoothed 0…1 band
 /// levels at 30 Hz.
 ///
@@ -328,8 +339,16 @@ final class AudioTapService: ObservableObject {
     /// property is treated as audible, which is the pre-existing behaviour.
     @Published private(set) var outputAudible = true
 
-    /// Set when the tap delivers callbacks that are all exactly zero while
-    /// Spotify reports running output. That is what a TCC-denied tap looks
+    /// `isCapturing`, delayed by `audioOnsetSeconds` at its start and extended
+    /// by `audioHoldSeconds` at its end. The collapsed strip shows a
+    /// visualizer-only wing off this when there is no now-playing card to show
+    /// instead (decision 056); keying that off `isCapturing` directly would pop
+    /// the wings open for a notification ping and flap the pill's width across
+    /// every gap between clips.
+    @Published private(set) var audioActive = false
+
+    /// Set when the tap delivers callbacks that are all exactly zero while some
+    /// process reports running output. That is what a TCC-denied tap looks
     /// like: every Core Audio call returns `noErr` and the buffers stay silent
     /// forever. Recorded once and left alone — no teardown, no retry loop.
     private(set) var silentDenialSuspected = false
@@ -343,11 +362,12 @@ final class AudioTapService: ObservableObject {
     private var tapID: AudioObjectID = 0
     private var aggregateID: AudioObjectID = 0
     private var ioProcID: AudioDeviceIOProcID?
-    private var processObjectID: AudioObjectID = 0
     private var tapStarted: UInt64 = 0
     private var lastBuildAttempt: UInt64 = 0
 
     private var pump: Timer?
+    private var audioHold: Timer?
+    private var audioOnset: Timer?
     /// The device the mute/volume listeners below are attached to, and the
     /// blocks themselves — both needed to detach them when the default output
     /// device changes.
@@ -369,7 +389,6 @@ final class AudioTapService: ObservableObject {
         }
         source.resume()
 
-        observeSpotify()
         observeProcessObjects()
         observeOutputDevice()
         observeAudibility()
@@ -378,22 +397,11 @@ final class AudioTapService: ObservableObject {
 
     // MARK: Lifecycle
 
-    private func observeSpotify() {
-        let center = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.didLaunchApplicationNotification,
-                     NSWorkspace.didTerminateApplicationNotification] {
-            center.addObserver(forName: name, object: nil, queue: .main) { note in
-                let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-                guard app?.bundleIdentifier == spotifyBundleID else { return }
-                Task { @MainActor in AudioTapService.shared.syncTap() }
-            }
-        }
-    }
-
-    /// Spotify has no Core Audio process object until it first touches the HAL,
-    /// which is usually after `didLaunchApplication` — a tap built at that
-    /// moment fails and would never be retried. Re-attempt whenever the process
-    /// object list changes; `syncTap()` is a no-op once a tap exists.
+    /// A tap built before Core Audio is ready — at login, or while the default
+    /// output device is still settling — fails and would never be retried.
+    /// Re-attempt whenever the process object list changes, which is exactly
+    /// when some app starts touching the HAL; `syncTap()` is a no-op once a
+    /// tap exists.
     private func observeProcessObjects() {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyProcessObjectList,
@@ -518,19 +526,9 @@ final class AudioTapService: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
-    private var spotifyPID: pid_t? {
-        NSRunningApplication
-            .runningApplications(withBundleIdentifier: spotifyBundleID)
-            .first?
-            .processIdentifier
-    }
-
-    /// The tap exists only while Spotify does.
+    /// One global tap, built once and kept for Tempo's lifetime — the only
+    /// thing that tears it down is an output-device change (decision 056).
     private func syncTap() {
-        guard let pid = spotifyPID else {
-            teardownTap()
-            return
-        }
         guard tapID == 0 else { return }
         // Building a tap makes Tempo a HAL client, which itself perturbs the
         // process object list. Throttle so a build that keeps failing can never
@@ -539,21 +537,22 @@ final class AudioTapService: ObservableObject {
         guard lastBuildAttempt == 0 || Double(now &- lastBuildAttempt) / 1e9 > 1 else { return }
         lastBuildAttempt = now
         if #available(macOS 14.2, *) {
-            buildTap(pid: pid)
+            buildTap()
         }
     }
 
     @available(macOS 14.2, *)
-    private func buildTap(pid: pid_t) {
+    private func buildTap() {
         guard let processor else { return }
-        guard let processObject = Self.processObject(for: pid) else { return }
-        processObjectID = processObject
 
-        let description = CATapDescription(stereoMixdownOfProcesses: [processObject])
+        // Every process's output, excluding none: Tempo itself plays no audio,
+        // and naming a specific app here is exactly what made the visualizer
+        // deaf to YouTube (decision 056).
+        let description = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
         description.uuid = UUID()
         description.name = "Tempo Visualizer"
         description.isPrivate = true
-        // Anything but `.unmuted` silences Spotify for the user.
+        // Anything but `.unmuted` silences the tapped audio for the user.
         description.muteBehavior = .unmuted
 
         var tap: AudioObjectID = 0
@@ -619,8 +618,8 @@ final class AudioTapService: ObservableObject {
         aggregateID = aggregate
         ioProcID = proc
         tempoDebug(String(format:
-            "tap built pid=%d processObject=%u subDeviceInputBuffers=%d aggregateInputBuffers=%d tapBuffer=%d outputUID=%@",
-            pid, processObject, Self.inputBufferCount(outputDevice),
+            "tap built global subDeviceInputBuffers=%d aggregateInputBuffers=%d tapBuffer=%d outputUID=%@",
+            Self.inputBufferCount(outputDevice),
             Self.inputBufferCount(aggregate),
             Self.tapBufferIndex(aggregate: aggregate, subDevice: outputDevice), outputUID))
         tapStarted = DispatchTime.now().uptimeNanoseconds
@@ -643,7 +642,6 @@ final class AudioTapService: ObservableObject {
         ioProcID = nil
         aggregateID = 0
         tapID = 0
-        processObjectID = 0
         tapStarted = 0
         lastBuildAttempt = 0
         silentDenialSuspected = false
@@ -652,7 +650,42 @@ final class AudioTapService: ObservableObject {
         stopPump()
         for i in 0..<bandCount { level[i] = 0 }
         if bands.contains(where: { $0 != 0 }) { bands = level }
-        if isCapturing { isCapturing = false }
+        setCapturing(false)
+    }
+
+    /// Publishes `isCapturing` and drives the `audioActive` window around it —
+    /// late to open, slow to close (decision 056).
+    private func setCapturing(_ live: Bool) {
+        if isCapturing != live { isCapturing = live }
+
+        if live {
+            audioHold?.invalidate()
+            audioHold = nil
+            guard !audioActive, audioOnset == nil else { return }
+            audioOnset = Self.after(audioOnsetSeconds) { [weak self] in
+                self?.audioActive = true
+                self?.audioOnset = nil
+            }
+            return
+        }
+
+        audioOnset?.invalidate()
+        audioOnset = nil
+        guard audioActive, audioHold == nil else { return }
+        audioHold = Self.after(audioHoldSeconds) { [weak self] in
+            self?.audioActive = false
+            self?.audioHold = nil
+        }
+    }
+
+    /// One-shot main-runloop timer, `.common` mode so the notch's own
+    /// animations do not defer it.
+    private static func after(_ seconds: TimeInterval, _ body: @escaping @MainActor () -> Void) -> Timer {
+        let timer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { _ in
+            MainActor.assumeIsolated { body() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
     }
 
     // MARK: UI pump
@@ -694,13 +727,13 @@ final class AudioTapService: ObservableObject {
                   silentFor > silentDenialSeconds,
                   stamps.lastCallback != 0,
                   Double(now &- stamps.lastCallback) / 1e9 < 0.5,
-                  Self.isRunningOutput(processObjectID) {
-            // Callbacks are arriving, they are all exactly zero, and Spotify is
-            // playing: the tap exists but was never authorized.
+                  Self.anyProcessRunningOutput() {
+            // Callbacks are arriving, they are all exactly zero, and something
+            // is playing: the tap exists but was never authorized.
             silentDenialSuspected = true
         }
 
-        if isCapturing != live { isCapturing = live }
+        setCapturing(live)
 
         if tempoDebugEnabled {
             let sinceLog = lastDebugLog == 0 ? Double.infinity : Double(now &- lastDebugLog) / 1e9
@@ -709,10 +742,10 @@ final class AudioTapService: ObservableObject {
                 lastDebugLog = now
                 let peak = raw.max() ?? 0
                 tempoDebug(String(format:
-                    "tap live=%d silentFor=%.2f suspected=%d tapBuffer=%d rawPeak=%.3f spotifyRunningOutput=%d",
+                    "tap live=%d silentFor=%.2f suspected=%d tapBuffer=%d rawPeak=%.3f anyRunningOutput=%d",
                     live ? 1 : 0, silentFor, silentDenialSuspected ? 1 : 0,
                     processor.debugTapBuffer, peak,
-                    Self.isRunningOutput(processObjectID) ? 1 : 0))
+                    Self.anyProcessRunningOutput() ? 1 : 0))
             }
         }
 
@@ -752,6 +785,24 @@ final class AudioTapService: ObservableObject {
                                        UInt32(MemoryLayout<pid_t>.size), $0, &size, &object)
         }
         return (status == noErr && object != 0) ? object : nil
+    }
+
+    /// Whether *any* process is currently playing audio. Reads the HAL's
+    /// process object list rather than one known process, because the global
+    /// tap has no single owning app to ask.
+    private static func anyProcessRunningOutput() -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(systemObject, &address, 0, nil, &size) == noErr,
+              size > 0 else { return false }
+        var objects = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(systemObject, &address, 0, nil, &size, &objects) == noErr else {
+            return false
+        }
+        return objects.contains { isRunningOutput($0) }
     }
 
     private static func isRunningOutput(_ processObject: AudioObjectID) -> Bool {

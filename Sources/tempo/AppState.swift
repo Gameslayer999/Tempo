@@ -87,11 +87,28 @@ final class AppState: ObservableObject {
     /// drop without first parking the drag to open it.
     @Published var isDragTargeting = false
 
+    /// True while the pointer is inside the region that opens the *undrawn*
+    /// notch — the hover target that survives when the collapsed strip is
+    /// hidden on a notchless display (decision 055). Written by
+    /// `NotchHoverDetector`, which only runs in that mode; ContentView feeds
+    /// it into the same dwell-and-haptic path as a real `onHover`.
+    @Published var isPointerNearNotch = false
+
     @Published var screenGeneration: UInt = 0
 
-    /// What the UI actually shows: expanded if either pinned by a click or
-    /// currently hovered.
-    var displayedExpanded: Bool { isExpanded || isHovered || isDragTargeting }
+    /// True while the first-run hello / setup sequence is playing in the panel
+    /// (decision 057). Written by `OnboardingController`.
+    ///
+    /// It is folded into `displayedExpanded` rather than being handled
+    /// separately, and that is the whole trick: the panel is already held open
+    /// by that one property, so hover-out, the outside-click monitor, the hit
+    /// region and the pin-on-click path all keep the onboarding panel open
+    /// without any of them learning what onboarding is.
+    @Published var isOnboarding = false
+
+    /// What the UI actually shows: expanded if pinned by a click, currently
+    /// hovered, being dragged onto, or running the first-run sequence.
+    var displayedExpanded: Bool { isExpanded || isHovered || isDragTargeting || isOnboarding }
 }
 
 struct NowPlaying: Equatable {

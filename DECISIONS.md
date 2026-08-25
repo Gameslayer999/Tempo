@@ -26,7 +26,7 @@
 | 013 | 2026-08-20 | Geometry: Dynamic-Island collapsed pill (notch + content-fit wings, concave-top NotchShape); expanded panel is content-sized — amends 006 | Amended by 019 |
 | 014 | 2026-08-20 | Motion & control polish: boringNotch spring constants, 0.25s hover dwell, Reduce Motion fades, HIG 28pt targets + press states, semantic colors — amends 011 | Accepted |
 | 015 | 2026-08-20 | Spotify signal delivery: event-driven via `PlaybackStateChanged` distributed notification; 1s AppleScript poll removed — amends 002 | Accepted |
-| 016 | 2026-08-20 | Real audio-reactive visualizer: Core Audio per-process tap on Spotify + 5-band vDSP FFT; 004's animation kept as silent fallback — supersedes 004 | Accepted |
+| 016 | 2026-08-20 | Real audio-reactive visualizer: Core Audio per-process tap on Spotify + 5-band vDSP FFT; 004's animation kept as silent fallback — supersedes 004 | Amended by 056 |
 | 017 | 2026-08-20 | System usage graph: CPU + memory sparklines (Notchy/iStat style) in the expanded panel; Path-based, never Canvas | Accepted |
 | 018 | 2026-08-20 | Packaging: `scripts/make-app.sh` assembles a signed `dist/Tempo.app`; required for the audio-capture permission | Accepted |
 | 019 | 2026-08-20 | Pill content insets clear the silhouette's corner curves; album art travels from the pill into the expanded header, left of the transport controls — amends 013 | Accepted |
@@ -46,7 +46,7 @@
 | 033 | 2026-08-20 | The outside-click monitor must ignore clicks that land on the panel: a non-activating app's own clicks reach its global monitor — completes 032 | Accepted |
 | 034 | 2026-08-20 | Hover-expand dwell becomes a setting (0–400ms, default 60ms) so the haptic tick lands while the finger is still on the trackpad; pattern/threading/background-actuation ruled out by measurement — amends 011 | Accepted |
 | 035 | 2026-08-20 | Agent lights become buttons: a click goes to that session's host window (AgentStatus's `focus_session`, macOS paths, ported to Swift), minus the `~/.claude/status` focus relay and the background-agent launch — amends 005 | Accepted |
-| 036 | 2026-08-21 | Notch on the lock screen: **not possible** from an app — macOS composites the lock screen in a context that excludes user-session windows at every level | **Rejected** (built, measured, reverted) |
+| 036 | 2026-08-21 | Notch on the lock screen: **not possible** from an app — macOS composites the lock screen in a context that excludes user-session windows at every level | **Rejected** (built, measured, reverted); its surviving conclusion is taken up by 058 |
 | 037 | 2026-08-22 | Notch geometry is re-read on every display change and the panel re-framed; the target stays the built-in notched screen, falling back to the menu-bar display when the lid is shut | Accepted |
 | 038 | 2026-08-22 | The media UI (cover, visualizer, transport, playlist) hides after 60s with nothing playing, and the collapsed pill shrinks to the bare notch — amends 013 | Accepted |
 | 039 | 2026-08-22 | The visualizer settles when the output device is muted or at zero volume: a process tap is taken before device volume, so muting was invisible to it — amends 016 | Accepted |
@@ -63,6 +63,13 @@
 | 050 | 2026-08-22 | Audio output: switch the default device and set its volume through the Core Audio HAL; Tempo never joins the render path (no aggregate devices, no per-app routing) — and listeners use the C-proc API, not the block API | Accepted |
 | 051 | 2026-08-22 | File shelf: a global drag monitor opens the notch as a drop target when a dragged file comes near, and the shelf keeps a copy that can be dragged back out | Accepted |
 | 052 | 2026-08-22 | Bluetooth connect/disconnect notices are built but dormant: IOBluetooth blocks forever on this machine because CoreBluetooth never powers on for the process, so the service is confined to a dedicated thread and left unwired | Deferred |
+| 053 | 2026-08-24 | Expanded-panel height ceiling raised 280 -> 600: the window is never resized, so the ceiling is a hard clip, and the sections added since the scaffold ran past it | Accepted |
+| 054 | 2026-08-24 | "Show on external displays" hides Tempo entirely when the display it would hug has no hardware notch; the panel is ordered out, and re-opening Tempo from Finder opens Settings so the switch is never a trap | Amended by 055 |
+| 055 | 2026-08-24 | The switch hides the *strip*, not Tempo: on a notchless display the collapsed pill is undrawn and claims no clicks, and a global pointer monitor opens the panel when the cursor reaches the top middle | Accepted |
+| 056 | 2026-08-24 | The visualizer taps **all** system audio with a global Core Audio tap instead of only Spotify's process, and the collapsed strip grows a visualizer-only wing when audio plays with no now-playing card behind it | Accepted |
+| 057 | 2026-08-24 | First run plays a cursive **hello** that writes itself out of the notch, then setup rows for the permissions Tempo needs; one `isOnboarding` flag folded into `displayedExpanded` reuses the whole panel-open machinery | Accepted |
+| 058 | 2026-08-24 | Weather and now-playing reach the lock screen as **two system notifications**, posted on lock, replaced in place while locked, withdrawn on unlock — the only surface decision 036 left available | Accepted |
+| 059 | 2026-08-24 | Weather data comes from **Open-Meteo** (no key, no account — WeatherKit needs a Team ID this ad-hoc-signed app does not have), located by reduced-accuracy CoreLocation with a typed city as the fallback | Accepted |
 
 ---
 
@@ -1682,6 +1689,10 @@ feature.
 - If a locked-Mac glance at agent state is ever wanted, the only sanctioned
   surfaces are system-mediated ones — a notification, or the Now Playing /
   Control Center furniture — not a window Tempo draws.
+  **Decision 058 took this route**: weather and now-playing are posted as two
+  notifications on the lock edge. `ScreenLockService`, deleted here, was
+  restored there — the lock *detection* measured correct on both edges and was
+  thrown away with the drawing that did not work.
 
 ### Consequences
 
@@ -3080,3 +3091,600 @@ If a future macOS or a notarized Developer ID identity lets CoreBluetooth power
 on for Tempo, events flow with no code change and only the UI remains to be
 built. The first thing to check is whether Tempo appears in System Settings ▸
 Privacy & Security ▸ Bluetooth at all.
+
+---
+
+## 053 — Raise the expanded panel's height ceiling from 280pt to 600pt
+
+**Date:** 2026-08-24
+
+### Context
+
+`NotchGeometry.panelHeight` is both the window height and the ceiling the drawn
+panel is clamped to (`ContentView.currentHeight`,
+`NotchHitRegion.expandedTarget`). The window is deliberately never resized —
+only the SwiftUI content animates (decision 013) — so anything the expanded
+content lays out below that line is outside the window and is not drawn at all.
+The ceiling is a hard clip, not a scroll.
+
+280pt was the scaffold's figure (decision 008), set when the expanded panel held
+only the now-playing header. Since then the panel gained the playback progress
+bar (039), the audio-output row (050), the file shelf (051), the usage graphs
+(017) and the per-session agent rows (040/048). With those on, the content runs
+past 280 and the bottom sections are silently cut off.
+
+Measured live on this machine (temporary `tempoDebug` in
+`reportExpandedHeight`, notchless external-display fallback, media idle): the
+output row + usage graphs + agent rows alone lay out at **233pt including the
+strip**. The sections not on screen at that moment add roughly 290pt more — the
+now-playing header ~113 (its column is title 33 + transport 28 + playlist ~35
+plus spacing, and the cover matches the column), the progress bar ~20 (its
+`hitHeight`), the shelf row 68 (`itemSide` 52 + 16), two more agent rows 60
+(28 + 2 spacing each), plus 12pt of stack spacing before each — for **~525pt in
+the fullest case**.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| **A. Raise the constant ceiling** | One-line change; keeps the never-resize window invariant that decision 013 and the hit-region design rest on; margin costs nothing because the window is transparent and click-through outside the drawn shape | The figure is derived, not measured end-to-end in the fullest state; a future section could run past it again |
+| B. Resize the window to the measured content | No ceiling to maintain | Changes the notch-window mechanics — the hit region, the shape reporting and the open/close springs all assume a fixed window; a window resize during the spring is exactly the jank decision 013 removed |
+| C. Scroll the whole expanded content | Never clips at any size | The panel becomes a scroll view, not a surface (UI Principle #3); a scrollbar in the notch competes with the signals |
+
+### Decision
+
+**Option A — `panelHeight: 280 -> 600`.**
+
+- Every growable section is already individually bounded: the agent list caps at
+  three rows and scrolls (`AgentLightsView.visibleRows`), the shelf row and the
+  output-device row scroll horizontally. So the fullest panel is a fixed height,
+  and the ceiling only has to clear it — it never has to grow with the machine's
+  state.
+- 600 clears the ~525pt fullest case with margin, and the margin is free: the
+  window is transparent outside the drawn silhouette and
+  `NotchHostingView.hitTest` passes every click outside the live shape through
+  to the app behind (Agent Guideline #3). A taller window claims nothing extra.
+- The drawn panel is unchanged in every state that already fitted: it is still
+  content-sized (`min(expandedContentHeight + stripHeight, panelHeight)`), so
+  the only visible difference is that the sections that used to be clipped are
+  now drawn.
+
+### Verification
+
+Debug and release builds clean; `dist/Tempo.app` rebuilt via
+`scripts/make-app.sh` and running. The measurement above was taken from the
+running signed bundle with a scripted hover over the notch, then the
+instrumentation was removed. The fullest state (music playing + playlist
+connected + shelf holding files + three live agent sessions) has not been
+observed on screen in one frame — that is the one part of this figure that is
+arithmetic rather than measurement.
+
+---
+
+## 054 — "Show on external displays": hide Tempo when there is no hardware notch
+
+**Date:** 2026-08-24
+
+### Context
+
+`NotchGeometry.resolveScreen()` prefers the built-in notched display whenever it
+is in `NSScreen.screens`, so on a MacBook with monitors attached Tempo already
+stays on the real notch. The case this decision is about is the *other* one:
+lid closed (the built-in leaves the screen list entirely), or a Mac with no
+built-in notch. There `resolveRaw` falls back to a centred 200x32 strip on the
+menu-bar display — a black bar hanging off the top of an external monitor that
+has no notch to merge with. Requested: a way to have nothing there at all.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| **A. One switch, hide the whole panel by ordering the window out** | A window that is not on screen draws nothing, takes no hover, accepts no drop and runs no SwiftUI body — there is no second "hidden" code path to keep correct; the panel returns in the state it left | The gear is inside the panel, so a hidden Tempo has no way back into Settings unless one is added |
+| B. Per-display opt-in list | Fine-grained | Nothing to be fine-grained about: Tempo only ever draws on one display at a time, and which one is already decided by the hardware notch |
+| C. Keep drawing but make the strip invisible until hovered | Panel stays reachable | An invisible hover target at the top of the screen is exactly the "swallows clicks meant for other apps" failure Agent Guideline #3 forbids |
+
+### Decision
+
+**Option A**, `Preferences.showOnExternalDisplays`, default **on** — which is
+byte-for-byte the behaviour that existed before the switch.
+
+- The condition is `showOnExternalDisplays || NotchGeometry.isHardwareNotch`.
+  `isHardwareNotch` reads `targetScreen.safeAreaInsets.top > 0` rather than
+  comparing `raw` against the fallback dimensions, because 200x32 is a plausible
+  real notch size and would not distinguish the two cases.
+- `NotchPanel` owns the visibility, not `AppDelegate`: it subscribes to the
+  preference itself, and because `@Published` replays on subscribe, that
+  subscription is also what first puts the panel on screen. `AppDelegate` no
+  longer calls `orderFrontRegardless()`, so a Tempo told not to draw never
+  flashes on screen at launch.
+- `applyGeometry()` calls `updateVisibility()` on every display change,
+  unconditionally — before this it early-returned when no dimension had changed,
+  and the display that just appeared or vanished is exactly the one that decides
+  whether Tempo shows at all.
+- **The escape hatch is `applicationShouldHandleReopen`**: opening Tempo again
+  from Finder or the Dock while it is running opens Settings. Without it, a user
+  who switches this off on a Mac with no notch has no route back to the gear,
+  since the gear lives inside the panel that is now hidden. (Re-opening a running
+  accessory app previously did nothing at all, so this costs no existing
+  behaviour.)
+
+### The `@Published` trap this uncovered
+
+The first implementation had the sink ignore the emitted value and re-read
+`prefs.showOnExternalDisplays`. A `@Published` publisher fires from `willSet`,
+so the stored property still holds the **old** value inside the closure, and the
+panel lagged one toggle behind the checkbox — measured: switching the box off
+left the panel on screen, switching it back on made the panel disappear. The
+sink now uses the value it is handed. `updateVisibility()` (for callers outside
+the publisher, where the property *is* current) reads the property.
+
+### Verification
+
+Driven live against the signed bundle on this machine, which is currently in
+exactly the case the switch governs — lid closed, one 3440x1440 external display,
+no screen with `safeAreaInsets.top > 0` — with window state read out of
+`CGWindowListCopyWindowInfo` and the checkbox clicked through the accessibility
+API:
+
+- Setting on (default): notch panel present, layer 25, 420x600 at the top of the
+  external display.
+- Setting off, relaunched: **no on-screen windows owned by Tempo at all.**
+- Re-opening Tempo from Finder while hidden: the Settings window appears
+  (682x420, layer 0) — the escape hatch works.
+- Clicking the checkbox on: the panel appears immediately, no relaunch.
+- Clicking it off again: the panel goes, the Settings window stays.
+
+Not verified, because it needs the lid: opening the built-in display while the
+setting is off should bring the panel back on the real notch. That path runs
+through `applyGeometry()` -> `updateVisibility()`, which is the same code the
+clicks above exercised, but the transition itself has not been observed.
+
+---
+
+## 055 — Hide the *strip*, not Tempo: an undrawn notch you can still hover
+
+**Date:** 2026-08-24 · **Amends 054**
+
+### Context
+
+Decision 054 made the switch mean "draw nothing on a notchless display", and
+implemented that by ordering the panel's window out. That is more than was
+wanted: it takes the music controls, the shelf and the agent lights away on that
+display too, and it made the switch a trap severe enough to need
+`applicationShouldHandleReopen` as an escape hatch. What is actually unwanted is
+the *black bar* — a pill with no notch under it to merge with, hanging off the
+top of a monitor (UI Principle #6). The panel itself is still wanted; it just
+should not be visible until asked for.
+
+### Decision
+
+The switch (now `showStripOnExternalDisplays`) hides the **collapsed strip**.
+The panel still opens when the pointer reaches the top middle of that display,
+and everything from there on is unchanged.
+
+Three parts:
+
+1. **Undrawn, not unbuilt.** `ContentView.panelOpacity` is 0 while the strip is
+   hidden and the panel is shut. Not an `if` in the hierarchy: the black
+   silhouette is what reports live animated geometry to `NotchHitRegion`, and a
+   view introduced by a branch flip does not join an animation already in flight
+   (the same constraint `backgroundShape` documents). As alpha, the panel fades
+   in as it grows and out as it retracts, on the existing springs.
+
+2. **Claims nothing while undrawn.** `NotchHostingView.activeRect` returns
+   `.zero` in that state, so no click in the middle of that display's menu bar
+   is swallowed (Agent Guideline #3). This is keyed off the expansion flag and
+   not the live shape — the deliberate opposite of the collapsing rule that
+   fixed the click-fallthrough bug (decision 012). The flag flips while the
+   panel is still visibly fading, so passthrough is handed back a few hundred
+   milliseconds early; here that is the right way to err, because what is fading
+   sits over someone else's menu bar and swallowing a click there is worse than
+   dropping one.
+
+3. **A global pointer monitor supplies the hover.** With nothing hit-testable
+   there, the window receives no mouse events over the invisible pill and
+   SwiftUI's `.onHover` can never fire, so the pointer's position is the only
+   signal left. `NotchHoverDetector` adds one `.mouseMoved` global monitor —
+   needing no Accessibility or Input Monitoring grant, the same finding
+   `DragDetector` rests on — and writes `state.isPointerNearNotch`. ContentView
+   feeds that into `handleHover`, the *same* dwell and haptic as a real hover,
+   so the two entry paths cannot drift apart. The monitor is installed only in
+   this one mode, gated on the setting and on `screenGeneration` so a display
+   change re-evaluates it.
+
+The activation region is `NotchGeometry.hoverActivationRegion`: exactly where
+the pill would be drawn if it were drawn — same width, same height, same place.
+The target is "the notch is still there, you just can't see it", not a second
+differently-shaped hot zone. It uses `pillWidth` rather than the live
+`collapsedWidth`, so it does not shrink to the bare notch when the media UI goes
+idle (decision 038) — an invisible target that silently changes size is
+unusable. Once open, the region becomes the panel's own rect, so travelling from
+the invisible strip down into the controls does not read as leaving.
+
+### What this reverses from 054
+
+The window is never ordered out any more, so `updateVisibility`/`setVisible` and
+the visibility subscription are gone, and `AppDelegate` orders the panel front at
+launch again. `applicationShouldHandleReopen` — added as 054's escape hatch —
+**stays**: Settings is reachable by hovering now, so it is no longer
+load-bearing, but re-opening a running accessory app previously did nothing at
+all, and opening Settings is the obviously right thing for it to do.
+
+### Verification
+
+Driven live against the signed bundle, on this machine in the mode the switch
+governs (lid closed, one 3440x1440 external, no screen with
+`safeAreaInsets.top > 0`). Expansion state read as the accessibility element
+count of the panel window — 1 collapsed, 15 expanded — with the pointer moved by
+posted `CGEvent`s:
+
+- Strip hidden, pointer away: window present (420x600 at the top of the
+  external), AX count **1**.
+- Pointer moved to the top middle: AX count **15** — the panel opened with
+  nothing drawn to hover.
+- Pointer moved away: back to **1**.
+- **Click-through, A/B with `hitTest` temporarily instrumented**, clicking the
+  top middle 40ms after arriving (inside a hover dwell raised to 400ms, so the
+  panel is still shut): strip *shown* logs one `hitTest` → **CLAIMED**, active
+  rect `(84, 568, 252, 32)`, the pill exactly. Strip *hidden* logs **no
+  `hitTest` at all** — the window is fully transparent there, so the window
+  server routed the click past Tempo without ever consulting the view. The
+  `.zero` guard is the belt to that braces, and covers the paths that do reach
+  the view.
+- **Cost of the monitor**, process CPU time across 4.0s of posted mouse-moves at
+  100/sec, pointer nowhere near the notch: 10ms with the monitor off, 90ms with
+  it on. 0.2ms per event, ~2% of one core while the pointer is moving
+  continuously, and nothing at all while it is still.
+
+## 056 — The visualizer taps all system audio, not Spotify's process (amends 016, 039)
+
+**Date:** 2026-08-24 · **Amends 016, 039**
+
+### Context
+
+Reported: "the audio visualizer bugs out when watching media other than
+Spotify: i am watching youtube right now and its stuck."
+
+It was not stuck — it was two Spotify-shaped signals agreeing that nothing was
+playing while sound came out of the machine:
+
+- **The tap was Spotify-only.** `AudioTapService` translated
+  `com.spotify.client`'s pid to a Core Audio process object and built
+  `CATapDescription(stereoMixdownOfProcesses:)` around it (decision 016). A
+  YouTube tab is not in that tap, so `isCapturing` stayed false and the reactive
+  path never engaged.
+- **The fallback keys off now-playing, and now-playing was Spotify.** With no
+  tap levels, `VisualizerView` falls back to the playback-synced sine animation
+  (decision 004), whose `animating` gate is `isPlaying && outputAudible`.
+  Measured at the time of the report, `mediaremote-adapter … get` returned
+  `bundleIdentifier = com.spotify.client`, `playing = false` — Spotify's paused
+  card, while Chrome played. So `animating` was false, the `TimelineView` was
+  explicitly `paused`, and the bars sat frozen at their resting height under
+  Spotify's stale artwork.
+
+Neither half was wrong on its own terms. The architecture only ever had one
+source of truth about audio, and it was named "Spotify".
+
+### Options
+
+| Option | Reactive for YouTube? | Cost |
+| --- | --- | --- |
+| **Global system tap** | Yes, for every app | One-line description change; the tap no longer has an owning app to ask about running output |
+| Tap the now-playing app's process | **No** — MediaRemote reported Spotify (paused) while Chrome played, so the tap would have followed the wrong pid | Same code, wrong answer |
+| Global tap used only as an is-anything-playing flag, driving the sine | Motion, but still fake | Same permission and nearly the same code as the real thing |
+
+### Decision
+
+**One global tap.** `CATapDescription(stereoGlobalTapButExcludeProcesses: [])` —
+verified present in the macOS 26.6 SDK (`CATapDescription.h`) — replaces the
+per-process description. Consequences:
+
+1. **The tap outlives Spotify.** It is built once and kept for Tempo's lifetime;
+   the only thing that tears it down is an output-device change. The
+   `NSWorkspace` launch/terminate observer for `com.spotify.client` and the
+   `spotifyPID` lookup are gone. `observeProcessObjects()` stays, now as the
+   generic retry hook for a build that failed before Core Audio was ready.
+2. **The TCC-denial heuristic has no owning app any more.** It asked
+   `isRunningOutput(spotifyProcessObject)`; it now asks
+   `anyProcessRunningOutput()`, which walks
+   `kAudioHardwarePropertyProcessObjectList`. Same meaning: callbacks arriving,
+   every sample exactly zero, something is playing → the tap was never
+   authorized.
+3. **Nothing is excluded.** Tempo plays no audio, and naming a specific app in
+   that list is precisely the mistake being fixed.
+
+Decision 039 is untouched and now matters more: a global tap is taken before the
+output device's volume and mute, so a muted Mac must still settle the bars.
+
+### The strip grows a visualizer-only wing
+
+A YouTube tab often publishes no now-playing card at all, so `isMediaActive` can
+be false while real audio plays — a bare notch over live sound, which reads as
+broken. `ContentView.showsAudioOnly` puts the visualizer wing up on real audio
+alone, with **no artwork** (there is none to show) and an empty mirror wing on
+the leading side so the notch gap stays centred on the hardware notch (UI
+Principle #6).
+
+It keys off `AudioTapService.audioActive`, not `isCapturing`, because
+`isCapturing` is the wrong shape for geometry at both ends:
+
+- **Late to open** (`audioOnsetSeconds = 2`). A Discord ping is sound, not
+  something to listen to, and must not pop the pill's wings open. Two seconds
+  sits above the 1.5 s `captureHoldSeconds` that keeps `isCapturing` up past a
+  short sound.
+- **Slow to close** (`audioHoldSeconds = 15`). The 1.5 s hold would retract and
+  re-grow the pill in the gap between two YouTube clips. Fifteen seconds rides
+  that out and still puts the notch back to bare shortly after a video ends —
+  deliberately much shorter than the 60 s `mediaIdleTimeout`, which is holding a
+  *card* someone may come back to rather than reacting to sound in the room.
+
+### What this does not change
+
+Now-playing metadata. When MediaRemote reports Spotify's paused card while
+another app plays, the collapsed strip still shows that card — the visualizer
+beside it is now honest, the artwork is not. That is a MediaRemote-side problem
+(which app owns the now-playing session) and is left alone here.
+
+### Verification
+
+- `CATapDescription.h` in the macOS 26.6 SDK exposes
+  `initStereoGlobalTapButExcludeProcesses:` (`NS_REFINED_FOR_SWIFT`), alongside
+  the mixdown initializer already in use.
+- `mediaremote-adapter … get` during the report: `bundleIdentifier =
+  com.spotify.client`, `playing = false`, elapsed 23.82 s — Spotify's stale
+  paused card while Chrome was playing. That is the frozen-bar state, reproduced
+  from the command line.
+- With the global tap built: `tap built global subDeviceInputBuffers=0
+  aggregateInputBuffers=1 tapBuffer=0`, and `anyProcessRunningOutput` reads 1
+  while Chrome plays and 0 when it stops — so the new denial heuristic tracks
+  real playback with no app named anywhere.
+- **Ad-hoc signing invalidates the audio grant on every rebuild.** After
+  `scripts/make-app.sh`, `kTCCServiceAudioCapture | com.gameslayer999.tempo`
+  still read `auth_value = 2` (allowed) in TCC.db, yet every tap buffer came
+  back exactly zero and `silentDenialSuspected` latched — the stored code
+  requirement no longer matches the re-signed binary, and Core Audio denies by
+  delivering silence rather than an error. `tccutil reset AudioCapture
+  com.gameslayer999.tempo` plus a relaunch re-prompts. This is the ad-hoc
+  signing tax `scripts/make-app.sh` already warns about, not new behaviour.
+
+
+---
+
+## 057 — First run writes a cursive `hello` out of the notch, then asks for what it needs
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+### Context
+
+Tempo had no first run at all. A fresh install put a pill on the notch and
+nothing else: the visualizer's bars sat still because System Audio Recording
+had never been granted, the Spotify features were invisible because no Client
+ID was configured, and nothing anywhere said either of those things. The user
+asked for "a hello screen when first starting the app, just like the Apple
+hello" — the word that writes itself during macOS setup.
+
+Two questions had real answers, and both were put to the user before any code
+was written (Agent Guideline #1, Decision Framework step 2).
+
+### Options considered — what the hello leads to
+
+| Option | For | Against |
+|---|---|---|
+| Animation only | Smallest change; pure atmosphere | A fresh install still starts with a dead visualizer and no explanation |
+| **Animation → setup rows** | The one moment the user is definitely looking is also the moment the permissions are asked for | More to build; the rows have to report live grant state or they lie |
+| Animation → open Settings | Reuses the built Settings window | Drops the user into a form instead of an introduction |
+
+**Chosen: animation → setup rows.**
+
+### Options considered — where it is presented
+
+| Option | For | Against |
+|---|---|---|
+| Full-screen black takeover | Most faithful to Apple's setup | Tempo is `LSUIElement` and never activates; a full-screen takeover is the most intrusive thing it could possibly do |
+| Centred floating card | Safe, dismissible | A second window to build and manage, and it says nothing about what Tempo *is* |
+| **Unrolls out of the notch** | The introduction happens in the surface being introduced; no new window at all | The panel is non-activating, so nothing in it can take keyboard input |
+
+**Chosen: it drops out of the notch** — the user's call, and the right one:
+the first thing Tempo does is demonstrate the thing it is.
+
+### How it is built
+
+- `HelloScript` — the word as **one continuous cubic path**, pen down at the
+  foot of the `h`, pen up at the end of the `o`. That is load-bearing:
+  `trimmedPath(from:to:)` walks a single subpath by arc length, so one stroke
+  writes itself letter by letter. Split into five per-letter subpaths it would
+  draw all five simultaneously, each a fifth of the way along. The control
+  points were tuned by **rendering the curve to a PNG and looking at it**,
+  three passes — the first read as `hello` but had a pinched `e` and a long
+  trailing swash; Apple's ends on a short tick, and the stroke is thin (3.2pt)
+  because weight is what separates handwriting from a logo.
+- `OnboardingController` — a three-state phase (`inactive` / `hello` /
+  `setup`), a 2.4s write-on, a 0.7s hold, and a tap anywhere on the word to
+  skip. Reduce Motion gets the finished word immediately, no write-on (HIG,
+  matching what the panel's springs already do).
+- **`AppState.isOnboarding`, folded into `displayedExpanded`.** This is the
+  whole trick and the reason the feature is small. The panel is already held
+  open by that one computed property, so hover-out, the outside-click monitor,
+  `NotchPanel.sendEvent`'s pin, and the live hit region all keep the onboarding
+  panel open *without any of them learning what onboarding is*. Nothing in
+  `NotchWindow.swift` changed.
+- `hasSeenHello` is written when the user finishes the cards, **never** when
+  the animation merely plays, so a crash mid-hello does not silently consume
+  the only first run. Settings ▸ About has "Show the welcome again", so
+  replaying is a button and not a hand-edited default (Agent Guideline #8).
+
+### The bug this shipped with, and the fix
+
+The setup cards bled past the panel's edges on first sight. Cause:
+`.padding(.horizontal, …)` applied **after** `.frame(width: panelWidth)`, which
+adds outside the frame — the content laid out at `panelWidth + 52pt` inside a
+window exactly `panelWidth` wide. `ContentView.expandedContent` had the right
+order all along (pad, then frame); the new view did not copy it. Height needed
+no change: `reportExpandedHeight` already measures the content and drives both
+the panel's height and the hit region's target, and onboarding reports through
+the same path, so the panel sizes itself to the hello and again to the cards.
+
+### Consequences
+
+- One new flag on `AppState`, no change to the window or hit-region code.
+- The rows report **live** grant state (`UNAuthorizationStatus`,
+  `CLAuthorizationStatus`, `SpotifyWebAPI.isAuthed`) rather than a checklist
+  the user ticks off, so a permission revoked in System Settings is reflected
+  the next time the panel is opened (UI Principle #4).
+- The audio row is deliberately **informational**: there is no TCC-status API
+  for audio capture, and `AudioTapService.silentDenialSuspected` is a
+  heuristic, not an authorization. Claiming a status Tempo cannot actually read
+  would be exactly the lying signal UI Principle #4 forbids, so the row says
+  what will happen and offers the System Settings pane instead.
+
+
+---
+
+## 058 — Weather and now-playing reach the lock screen as two notifications (completes 036)
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+### Context
+
+Asked for: revisit the lock screen, with weather and music on it.
+
+Decision 036 is the reason this is not simply "draw the notch there". That
+decision built a lock-aware panel, measured it, and reverted every line: macOS
+composites the lock screen in a **separate secure context that does not include
+user-session windows at any level**. Four opaque labelled strips at levels
+1000, 2002, 2005 and 2147483629 — bracketing `loginwindow`'s real lock-screen
+windows from below, between, just above and far above — were *all* invisible
+while locked. Window level is not the variable; there is no value that works.
+
+036's own closing section named the one surface that remains: "the only
+sanctioned surfaces are system-mediated ones — a notification". This decision
+takes it up.
+
+### Options considered
+
+| Option | For | Against |
+|---|---|---|
+| One combined card | Never more than one Tempo card | Weather and music are different rhythms crammed into one line |
+| **Two cards** | Each legible alone; weather survives when the music stops | Two Tempo notifications stacked on the lock screen |
+| Music card only, weather as a subtitle | Quietest | A locked Mac playing nothing shows nothing at all |
+| Always posted, not just when locked | More reach | Permanently occupies a Notification Center slot — clutter |
+
+**Chosen: two separate cards** (the user's call).
+
+### How it works
+
+- `ScreenLockService` — **this is 036's code, resurrected.** That decision
+  deleted it along with everything else, but the deletion threw away a verified
+  component: the lock *detection* was measured correct on both edges at the
+  time; only the drawing was impossible. It is `loginwindow`'s
+  `com.apple.screenIsLocked` / `screenIsUnlocked` distributed notifications,
+  reconciled against `CGSessionCopyCurrentDictionary()` at start, on wake, and
+  on session activation, so a missed edge self-corrects (UI Principle #4).
+- `LockScreenNotifier` — posts on the lock edge, withdraws on the unlock edge.
+  A change while locked (a track, a refreshed reading) re-adds the **same
+  identifier**, which replaces the delivered card in place instead of stacking
+  a second one, so a whole evening of music is one card that keeps changing.
+- `interruptionLevel = .passive`, `sound = nil`: delivered without a sound and
+  without lighting a sleeping display. The card is meant to be *found* on the
+  lock screen, not to interrupt.
+- Only a **playing** track earns a music card, and only a real reading earns a
+  weather card; otherwise that card is withdrawn rather than posted empty.
+- Album art rides along as a `UNNotificationAttachment`, written as a PNG into
+  the temp directory and swept up on withdrawal (the attachment API takes a
+  file URL and moves the file into its own store).
+- Off by default. The feature needs Notification authorization, and a fresh
+  install must never open with a permission prompt nobody asked for — the
+  hello screen (decision 057) is what turns it on, at the moment the user
+  grants.
+
+### The part Tempo does not control, and says so
+
+Authorization is necessary and **not sufficient**. Two switches decide whether
+a delivered card is legible when locked, and neither is ours: System Settings ▸
+Notifications ▸ Tempo needs **Show on Lock Screen** on, and **Show previews**
+set to *Always* — the default, "when unlocked", renders a locked card as a
+contentless "Tempo · Notification". Settings ▸ Weather states this explicitly
+and links to the pane, because a granted-but-blank card is precisely the
+failure mode that reads as a broken feature.
+
+### Consequences
+
+- Off means genuinely off: no notification-centre calls, no lock observers, no
+  network, no location manager.
+- Withdrawn on quit as well as on unlock — a card left in Notification Center
+  after the app that posted it is gone is a signal with nothing behind it.
+- `UNUserNotificationCenter.current()` traps in a process with no bundle, so
+  every entry point is gated on `Bundle.main.bundleIdentifier != nil`: the bare
+  `swift build` binary simply has no lock cards.
+
+
+---
+
+## 059 — Weather comes from Open-Meteo, located by reduced-accuracy CoreLocation with a typed city as fallback
+
+**Date:** 2026-08-24 · **Status:** Accepted
+
+### Context
+
+Decision 058's weather card needs a weather source and a location. Both were
+verified against the real services before any code was written (Agent
+Guideline #4).
+
+### The data source
+
+**WeatherKit is unavailable to this app.** It requires a real Team ID and a
+`com.apple.developer.weatherkit` entitlement; `codesign -dv` on
+`dist/Tempo.app` reports `Signature=adhoc`, `TeamIdentifier=not set`
+(decision 018 — there is no Apple Development identity on this machine). That
+is not a preference, it is a hard block.
+
+**Open-Meteo** was queried live from this machine before being chosen. It
+returns current temperature, apparent temperature, a WMO condition code and a
+day/night flag with **no API key and no account**, and advertises
+`interval: 900` on the current block — so Tempo polls every 15 minutes and no
+faster, because faster would spend requests re-reading identical numbers. Its
+geocoding endpoint (same host family, also key-free) resolves a typed city
+name; both were confirmed returning well-formed payloads.
+
+### The location
+
+| Option | For | Against |
+|---|---|---|
+| **CoreLocation, typed city as fallback** | Correct when you travel; still works when denied | Two code paths, one TCC prompt |
+| Manual city only | No permission ever, most private | Wrong the moment you travel |
+| CoreLocation only | Fewest moving parts | A denied prompt kills the feature permanently |
+
+**Chosen: CoreLocation with the city fallback** (the user's call), which is
+also the only one that satisfies Guideline #3's fail-silent rule.
+
+Accuracy is deliberately `kCLLocationAccuracyReduced` — a coarse, city-scale
+fix is all a weather lookup needs, it is the least the user has to hand over
+(Guideline #5), and it makes macOS show the *approximate* location prompt
+rather than the precise one. The distance filter is 3km, so a walk around the
+block spends neither a geocode nor a weather request. The device coordinate is
+**never written to disk**; only a *typed* city's resolved coordinates are
+cached, because the user typed them.
+
+### One bug worth recording
+
+The first pass matched only `.authorizedAlways` and the deprecated
+`.authorized` when deciding whether to start the location manager. Tempo calls
+`requestWhenInUseAuthorization()`, which is exactly the request that returns
+**`.authorizedWhenInUse`** — so a user who granted location would have had the
+manager silently never start, and the weather would have fallen back to the
+typed city with nothing to explain why. Folded into a
+`CLAuthorizationStatus.grantsLocation` helper used by every call site, so the
+same omission cannot recur in one place and not another.
+
+### Consequences
+
+- The city fallback uses **Open-Meteo's** geocoder rather than `CLGeocoder`,
+  deliberately: `CLGeocoder` is rate-limited per process and refuses outright
+  while Location Services is off, which is precisely the case the fallback
+  exists for. `CLGeocoder` is still used to *name* a device fix, where Location
+  Services is by definition on.
+- What leaves the machine is a rounded coordinate and nothing else — no
+  identifier, no device name, no session data. Settings ▸ Weather says so.
+- Switching the weather card off stops the network requests **and** the
+  location manager. An off switch that leaves a location manager running is not
+  off.

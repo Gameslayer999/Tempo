@@ -11,7 +11,25 @@ enum NotchGeometry {
     /// content (sections hide/show — see ContentView.expandedContent) and is
     /// usually shorter than this; the window just has to be tall enough for
     /// the fullest case (all sections visible).
-    static let panelHeight: CGFloat = 280
+    ///
+    /// The window is never resized, so anything the content lays out below
+    /// this line is outside the window and simply not drawn — the ceiling is
+    /// a hard clip, not a scroll. 280 was the scaffold's figure, from when the
+    /// panel held only the now-playing header; the progress bar, output row,
+    /// file shelf, usage graphs and agent rows added since then push the
+    /// fullest panel past it, so it was losing its bottom sections.
+    ///
+    /// Every growable section is itself bounded — the agent list caps at three
+    /// scrolling rows, the shelf row and the output-device row scroll
+    /// horizontally — so the fullest case is a fixed figure, and this only has
+    /// to clear it. Measured live: output row + usage graphs + agent rows
+    /// alone lay out at 233pt including the strip; the sections that were not
+    /// on screen at that moment (now-playing header ~113, progress bar ~20,
+    /// shelf row 68, two more agent rows 60, plus 12pt of stack spacing each)
+    /// add ~290pt, for ~525pt in the fullest case. 600 clears that with
+    /// margin, and margin is free: the window is transparent outside the drawn
+    /// shape and passes clicks through (`NotchHostingView.hitTest`).
+    static let panelHeight: CGFloat = 600
 
     /// The screen Tempo hugs, and the notch dimensions read off it.
     ///
@@ -65,6 +83,21 @@ enum NotchGeometry {
         return changed
     }
 
+    /// Whether the screen Tempo is hugging actually has a hardware notch.
+    ///
+    /// False means the strip is the notchless fallback — the lid is closed, or
+    /// the Mac has no built-in notch at all — and Tempo is drawing a 200x32
+    /// bar at the top of whichever display carries the menu bar. That is the
+    /// only case `Preferences.showStripOnExternalDisplays` governs
+    /// (decisions 054, 055):
+    /// when the built-in notched display is present, `resolveScreen` already
+    /// picks it over every external one, so the setting has nothing to do.
+    ///
+    /// Read from the resolved screen rather than from `raw`, because the
+    /// fallback dimensions are a plausible real notch size and would not
+    /// distinguish the two cases.
+    static var isHardwareNotch: Bool { (targetScreen?.safeAreaInsets.top ?? 0) > 0 }
+
     static var notchWidth: CGFloat { raw.width }
     static var notchHeight: CGFloat { raw.height }
     static var stripHeight: CGFloat { notchHeight }
@@ -113,6 +146,41 @@ enum NotchGeometry {
             y: screen.maxY - height,
             width: width,
             height: height
+        )
+    }
+
+    /// Screen-coordinate region (origin bottom-left, matching
+    /// `NSEvent.mouseLocation`) that opens the notch when the collapsed strip
+    /// is not drawn (decision 055).
+    ///
+    /// Exactly where the pill *would* be if it were drawn — same width, same
+    /// height, same place — so the target is "the notch is still there, you
+    /// just can't see it" rather than a second, differently-shaped hot zone.
+    /// `pillWidth` and not the live `collapsedWidth`, so the target does not
+    /// shrink to the bare notch when the media UI goes idle (decision 038):
+    /// an invisible target that silently changes size is unusable.
+    static var hoverActivationRegion: NSRect {
+        let screen = screenFrame
+        return NSRect(
+            x: screen.midX - pillWidth / 2,
+            y: screen.maxY - stripHeight,
+            width: pillWidth,
+            height: stripHeight
+        )
+    }
+
+    /// Screen-coordinate region the expanded panel occupies right now — what
+    /// keeps the undrawn notch open once the pointer is inside it. Sized from
+    /// the same content-measured target the hit region uses, so it tracks a
+    /// panel whose sections have appeared or disappeared.
+    static var expandedPanelRegion: NSRect {
+        let screen = screenFrame
+        let size = NotchHitRegion.shared.expandedTarget
+        return NSRect(
+            x: screen.midX - size.width / 2,
+            y: screen.maxY - size.height,
+            width: size.width,
+            height: size.height
         )
     }
 
@@ -214,6 +282,7 @@ final class NotchPanel: NSPanel {
     private var screenObserver: Any?
     private var settleTask: Task<Void, Never>?
     private let state: AppState
+    private let prefs: Preferences
 
     /// Never key, never main: the panel overlays every app and must never take
     /// focus away from what the user is actually typing into.
@@ -246,8 +315,9 @@ final class NotchPanel: NSPanel {
         super.sendEvent(event)
     }
 
-    init(state: AppState, content: ContentView) {
+    init(state: AppState, prefs: Preferences, content: ContentView) {
         self.state = state
+        self.prefs = prefs
 
         super.init(
             contentRect: NotchGeometry.windowFrame,
@@ -297,6 +367,22 @@ final class NotchPanel: NSPanel {
             activeRect: { [weak state] in
                 let panelWidth = NotchGeometry.panelWidth
                 let panelHeight = NotchGeometry.panelHeight
+                // - strip hidden on a notchless display, panel shut
+                //   (decision 055): nothing is drawn, so nothing is claimed,
+                //   and every click in the middle of that menu bar goes to the
+                //   app behind (Agent Guideline #3). Keyed off the expansion
+                //   flag rather than the live shape — the opposite of the
+                //   collapsing rule above, and deliberately so: the flag flips
+                //   while the panel is still visibly fading, so this hands
+                //   clicks back a few hundred milliseconds early. That is the
+                //   right way to err here, because what is fading sits over
+                //   someone else's menu bar, and swallowing a click there is
+                //   worse than dropping one.
+                if state?.displayedExpanded != true,
+                   !prefs.showStripOnExternalDisplays,
+                   !NotchGeometry.isHardwareNotch {
+                    return .zero
+                }
                 let source = state?.displayedExpanded == true
                     ? NotchHitRegion.shared.expandedTarget
                     : NotchHitRegion.shared.size

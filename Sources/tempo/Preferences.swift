@@ -25,6 +25,17 @@ final class Preferences: ObservableObject {
         static let hoverExpandDelayMS = "hoverExpandDelayMS"
         static let showFileShelf = "showFileShelf"
         static let showAudioOutput = "showAudioOutput"
+        static let showStripOnExternalDisplays = "showStripOnExternalDisplays"
+        static let showLockScreenCards = "showLockScreenCards"
+        static let lockCardShowsWeather = "lockCardShowsWeather"
+        static let lockCardShowsMusic = "lockCardShowsMusic"
+        static let weatherUseLocation = "weatherUseLocation"
+        static let weatherCity = "weatherCity"
+        static let weatherCityName = "weatherCityName"
+        static let weatherCityLatitude = "weatherCityLatitude"
+        static let weatherCityLongitude = "weatherCityLongitude"
+        static let weatherUnit = "weatherUnit"
+        static let hasSeenHello = "hasSeenHello"
     }
 
     private let defaults: UserDefaults
@@ -58,6 +69,94 @@ final class Preferences: ObservableObject {
     /// slider (decision 050).
     @Published var showAudioOutput: Bool {
         didSet { defaults.set(showAudioOutput, forKey: Key.showAudioOutput) }
+    }
+
+    /// Whether the *collapsed strip* is drawn when the display Tempo hugs has
+    /// no hardware notch — the notchless fallback, which is what you get with
+    /// the lid closed or on a Mac with no built-in notch (decisions 054, 055).
+    ///
+    /// Off does not disable Tempo there: the panel still opens when the
+    /// pointer reaches the top middle of that display, it simply isn't drawn
+    /// until it does, and it claims no clicks while undrawn. On (the default)
+    /// is the behaviour that existed before this switch.
+    @Published var showStripOnExternalDisplays: Bool {
+        didSet { defaults.set(showStripOnExternalDisplays, forKey: Key.showStripOnExternalDisplays) }
+    }
+
+    /// Whether Tempo posts its lock-screen cards at all (decision 058).
+    ///
+    /// Off by default, and deliberately: the feature needs Notification
+    /// authorization, and a fresh install must never open with a permission
+    /// prompt nobody asked for. The hello screen is what turns it on, at the
+    /// moment the user grants (decision 057).
+    @Published var showLockScreenCards: Bool {
+        didSet { defaults.set(showLockScreenCards, forKey: Key.showLockScreenCards) }
+    }
+
+    /// Which of the two cards get posted. Both on is the point of the feature;
+    /// either can be switched off without disabling the other, and switching
+    /// weather off is also what stops every location and network request
+    /// (`WeatherService` is started from this).
+    @Published var lockCardShowsWeather: Bool {
+        didSet { defaults.set(lockCardShowsWeather, forKey: Key.lockCardShowsWeather) }
+    }
+    @Published var lockCardShowsMusic: Bool {
+        didSet { defaults.set(lockCardShowsMusic, forKey: Key.lockCardShowsMusic) }
+    }
+
+    /// Whether weather follows the Mac's own location (decision 059). Off
+    /// means the typed city below is the only source and CoreLocation is
+    /// never asked for anything.
+    @Published var weatherUseLocation: Bool {
+        didSet { defaults.set(weatherUseLocation, forKey: Key.weatherUseLocation) }
+    }
+
+    /// The city typed in Settings ▸ Weather — the fallback when location is
+    /// off, denied, or has produced no fix. Stored as typed; the coordinates
+    /// it resolved to are cached separately in `cachedCityPlace`.
+    @Published var weatherCity: String {
+        didSet { defaults.set(weatherCity, forKey: Key.weatherCity) }
+    }
+
+    /// Degrees Fahrenheit or Celsius. Open-Meteo converts server-side, so this
+    /// is a query parameter rather than a formatting step.
+    @Published var weatherUnit: TemperatureUnit {
+        didSet { defaults.set(weatherUnit.rawValue, forKey: Key.weatherUnit) }
+    }
+
+    /// Whether the first-run hello has already played (decision 057). The one
+    /// preference with no Settings toggle of its own — Settings ▸ About has a
+    /// "Show the welcome again" button that clears it, so replaying the
+    /// onboarding never means hand-editing defaults (Agent Guideline #8).
+    @Published var hasSeenHello: Bool {
+        didSet { defaults.set(hasSeenHello, forKey: Key.hasSeenHello) }
+    }
+
+    /// Coordinates the typed city resolved to, cached so a relaunch does not
+    /// re-geocode and so weather works before the network answers. Only ever
+    /// holds a *typed* place — a CoreLocation fix is never written to disk
+    /// (Agent Guideline #5).
+    var cachedCityPlace: WeatherPlace? {
+        get {
+            let name = defaults.string(forKey: Key.weatherCityName) ?? ""
+            guard defaults.object(forKey: Key.weatherCityLatitude) != nil else { return nil }
+            return WeatherPlace(
+                name: name,
+                latitude: defaults.double(forKey: Key.weatherCityLatitude),
+                longitude: defaults.double(forKey: Key.weatherCityLongitude)
+            )
+        }
+        set {
+            guard let newValue else {
+                defaults.removeObject(forKey: Key.weatherCityName)
+                defaults.removeObject(forKey: Key.weatherCityLatitude)
+                defaults.removeObject(forKey: Key.weatherCityLongitude)
+                return
+            }
+            defaults.set(newValue.name, forKey: Key.weatherCityName)
+            defaults.set(newValue.latitude, forKey: Key.weatherCityLatitude)
+            defaults.set(newValue.longitude, forKey: Key.weatherCityLongitude)
+        }
     }
 
     /// Shape of the agent signal in the *collapsed* pill (decision 042).
@@ -127,6 +226,13 @@ final class Preferences: ObservableObject {
             Key.hoverExpandDelayMS: Self.defaultHoverExpandDelayMS,
             Key.showFileShelf: true,
             Key.showAudioOutput: true,
+            Key.showStripOnExternalDisplays: true,
+            Key.showLockScreenCards: false,
+            Key.lockCardShowsWeather: true,
+            Key.lockCardShowsMusic: true,
+            Key.weatherUseLocation: true,
+            Key.weatherUnit: TemperatureUnit.systemDefault.rawValue,
+            Key.hasSeenHello: false,
         ])
         self.defaults = defaults
         showVisualizer = defaults.bool(forKey: Key.showVisualizer)
@@ -135,6 +241,15 @@ final class Preferences: ObservableObject {
         showAgentStats = defaults.bool(forKey: Key.showAgentStats)
         showFileShelf = defaults.bool(forKey: Key.showFileShelf)
         showAudioOutput = defaults.bool(forKey: Key.showAudioOutput)
+        showStripOnExternalDisplays = defaults.bool(forKey: Key.showStripOnExternalDisplays)
+        showLockScreenCards = defaults.bool(forKey: Key.showLockScreenCards)
+        lockCardShowsWeather = defaults.bool(forKey: Key.lockCardShowsWeather)
+        lockCardShowsMusic = defaults.bool(forKey: Key.lockCardShowsMusic)
+        weatherUseLocation = defaults.bool(forKey: Key.weatherUseLocation)
+        weatherCity = defaults.string(forKey: Key.weatherCity) ?? ""
+        weatherUnit = TemperatureUnit(rawValue: defaults.string(forKey: Key.weatherUnit) ?? "")
+            ?? TemperatureUnit.systemDefault
+        hasSeenHello = defaults.bool(forKey: Key.hasSeenHello)
         collapsedAgentLight = CollapsedAgentLightMode(
             rawValue: defaults.string(forKey: Key.collapsedAgentLight) ?? ""
         ) ?? .summary

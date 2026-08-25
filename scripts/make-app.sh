@@ -106,9 +106,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 	<key>CFBundleExecutable</key>
 	<string>${EXECUTABLE_NAME}</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.2.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSMinimumSystemVersion</key>
@@ -121,6 +121,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 	<string>Tempo shows a brief notice in the notch when a Bluetooth device connects or disconnects. It never pairs, configures or transfers data.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Tempo captures Spotify's audio output solely to animate the notch visualizer; audio is never recorded or stored.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Tempo uses your approximate location to show current weather on the lock-screen card. The coordinate is rounded, used only for that weather lookup, and never stored or shared. You can type a city in Settings instead.</string>
 </dict>
 </plist>
 PLIST

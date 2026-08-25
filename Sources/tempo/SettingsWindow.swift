@@ -19,11 +19,27 @@ final class SettingsWindowController {
     private let prefs: Preferences
     private let api: SpotifyWebAPI
     private let state: AppState
+    private let weather: WeatherService
+    private let location: LocationService
+    private let lockCards: LockScreenNotifier
+    private let onboarding: OnboardingController
 
-    init(prefs: Preferences, api: SpotifyWebAPI, state: AppState) {
+    init(
+        prefs: Preferences,
+        api: SpotifyWebAPI,
+        state: AppState,
+        weather: WeatherService,
+        location: LocationService,
+        lockCards: LockScreenNotifier,
+        onboarding: OnboardingController
+    ) {
         self.prefs = prefs
         self.api = api
         self.state = state
+        self.weather = weather
+        self.location = location
+        self.lockCards = lockCards
+        self.onboarding = onboarding
     }
 
     func show() {
@@ -31,6 +47,10 @@ final class SettingsWindowController {
         // re-read it every time rather than showing a stale toggle
         // (UI Principle #4).
         prefs.refreshLaunchAtLogin()
+        // Same reason as the login item: notification permission can be
+        // revoked in System Settings behind our back, and the Weather pane
+        // reports it.
+        lockCards.refreshAuthorization()
 
         let window = self.window ?? makeWindow()
         self.window = window
@@ -63,7 +83,15 @@ final class SettingsWindowController {
         // app, which the notch panel is reachable from.
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.minSize = NSSize(width: 580, height: 360)
-        window.contentView = NSHostingView(rootView: SettingsView(prefs: prefs, api: api, state: state))
+        window.contentView = NSHostingView(rootView: SettingsView(
+            prefs: prefs,
+            api: api,
+            state: state,
+            weather: weather,
+            location: location,
+            lockCards: lockCards,
+            onboarding: onboarding
+        ))
         window.setFrameAutosaveName("TempoSettingsWindow")
         window.center()
         return window

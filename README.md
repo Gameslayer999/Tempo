@@ -5,9 +5,9 @@ the MacBook notch into a glanceable surface for **music** and **live AI-agent
 session status**.
 
 > **Status: pre-alpha.** The v1 feature set plus the 2026-08-20 core rework
-> (real audio visualizer, usage graph, Dynamic-Island pill, click-reliability fix)
-> and the Settings window builds clean and is awaiting live user verification.
-> See `NEXT_STEPS.md`.
+> (real audio visualizer, usage graph, Dynamic-Island pill, click-reliability fix),
+> the Settings window, the first-run hello and the lock-screen cards build clean
+> and are awaiting live user verification. See `NEXT_STEPS.md`.
 
 ## What it does (v1)
 
@@ -17,7 +17,8 @@ wider than its content:
   Spotify, Apple Music, a YouTube video in your browser, a podcast. Tempo reads
   macOS's own now-playing information, so it is not tied to one app
 - an **audio-reactive visualizer** on the right — five bars driven by a live
-  5-band frequency analysis of Spotify's actual audio (bass in the center).
+  5-band frequency analysis of whatever your Mac is actually playing (bass in
+  the center): Spotify, a YouTube tab, a game, a call.
   Requires running the bundled app and the one-time audio permission below;
   otherwise the bars fall back to a playback-synced animation. The bars settle
   when your Mac is muted or at zero volume — a process tap is taken before the
@@ -38,7 +39,13 @@ player running at all — the media UI switches off: the cover, the visualizer a
 transport controls and the progress bar disappear, and the pill shrinks back to
 exactly the hardware notch — except for the agent light, which stays put, since
 that is the signal worth widening a bare notch for. It comes back the moment
-something plays again. The panel still opens on hover, with the usage graphs and
+something plays again.
+
+Audio with no now-playing card behind it — a YouTube tab that publishes no track
+info, a game, a call — still gets a visualizer, with no artwork beside it. It
+appears about two seconds in, so a notification ping never opens the pill, and
+stays up for fifteen seconds after the sound stops so the gap between two clips
+doesn't retract it. The panel still opens on hover, with the usage graphs and
 agent lights in it.
 
 **Hover to expand** — resting the pointer on the pill briefly (60ms by default,
@@ -123,14 +130,79 @@ Tempo is built to be extremely light: everything is event-driven or gated (no
 music polling; the visualizer and animations fully stop redrawing at rest).
 Measured ≈0.3% CPU idle on this machine.
 
+## First run
+
+The first time Tempo launches, a cursive **hello** writes itself out of the
+notch — one continuous stroke, drawn over about two and a half seconds — and
+then the panel resolves into a short setup list. Click the word to skip
+straight to it.
+
+The list is the handful of things Tempo needs a human to say yes to, each
+showing its **live** state rather than a checkbox you tick:
+
+- **Audio visualizer** — macOS asks for System Audio Recording the first time
+  audio plays; until you allow it, the bars stay still. The row links to the
+  System Settings pane. (Tempo cannot read this permission's state, so this row
+  tells you what will happen rather than claiming a status it can't verify.)
+- **Lock screen cards** — asks for notification permission, and switches the
+  lock-screen cards on if you allow it.
+- **Weather location** — appears once the cards are on; asks for *approximate*
+  location so the weather card knows where you are. You can type a city instead.
+- **Spotify playlists** — optional, opens Settings ▸ Music (the Client ID needs
+  a keyboard, and the notch panel deliberately never takes focus).
+
+**Get Started** closes it and the notch behaves normally from then on. Nothing
+here is mandatory and everything is changeable later in Settings. To see it
+again: Settings ▸ About ▸ **Show the welcome again**.
+
+## Lock screen
+
+With your Mac locked, Tempo can show **two notification cards** — current
+weather, and what's playing:
+
+- posted when the screen locks
+- updated **in place** while it stays locked, so a track change replaces the
+  card rather than stacking a new one
+- withdrawn when you unlock, so Notification Center isn't left holding them
+
+They're silent and passive: no sound, and they never wake a sleeping display.
+A card only appears when it has something true to say — no card for a paused
+player, none for weather that hasn't loaded.
+
+**Tempo cannot draw on the lock screen.** macOS composites it in a secure
+context that excludes app windows at every window level; this was built,
+measured and abandoned (see decision 036 in `DECISIONS.md`). Notifications are
+the only surface available, which is what these are.
+
+Two switches decide whether the cards are actually *legible* when locked, and
+neither is Tempo's to set — in **System Settings ▸ Notifications ▸ Tempo**:
+
+- **Show on Lock Screen** must be on
+- **Show previews** must be **Always** — the default, *when unlocked*, renders a
+  locked card as a contentless "Tempo · Notification"
+
+Settings ▸ Weather links straight to that pane and says which of these is
+outstanding.
+
 ## Settings
 
 The gear in the expanded panel's top-right corner opens a standard macOS
 Settings window — sidebar of panes on the left, grouped form on the right, the
 same shape as System Settings. Opening it collapses the notch panel. Tempo has
-no Dock icon, so the gear is the only way in.
+no Dock icon, so the gear is the usual way in; opening Tempo again from Finder
+while it is already running opens Settings too.
 
-- **General** — *Expanded panel* picks the material the open panel is drawn in,
+- **General** — *Displays* ▸ **Show the strip on external displays** governs what
+  Tempo draws when there is no hardware notch to hug: with the lid closed, or on a
+  Mac with no built-in notch, it normally falls back to a small strip at the top
+  of whichever display carries the menu bar. Switch this off and that strip isn't
+  drawn — but Tempo is still there: move the pointer to the top middle of the
+  display and the panel opens as usual, with the same hover delay and the same
+  tick. While it is closed it is invisible *and* click-through, so the menu bar
+  underneath behaves exactly as if Tempo weren't running. On by default, and it
+  has no effect while the built-in display is available — Tempo already prefers
+  that display's real notch over every external monitor. *Expanded panel* picks
+  the material the open panel is drawn in,
   by clicking a miniature of the panel drawn in that style: **Regular glass**
   (default), **Clear glass** (near-transparent, with a slight scrim so the text
   stays readable), **Album tint** (frosted glass tinted with the current cover's
@@ -153,6 +225,15 @@ no Dock icon, so the gear is the only way in.
   setup: a button that opens the Spotify Developer Dashboard, a copy button for
   the exact Redirect URI, and the Client ID field. See below for why that setup
   exists at all.
+- **Weather** — the lock-screen cards and where their weather comes from.
+  *Lock screen*: a master switch plus one per card (weather, what's playing).
+  *Location*: **Use my location** (approximate — CoreLocation at reduced
+  accuracy), a **City** field used whenever location is off, denied or hasn't
+  produced a fix yet, and °F / °C. *Current conditions* shows the live reading
+  and a Refresh button, so you can tell the feature is working without locking
+  your Mac. The pane reports notification permission and links to the two
+  System Settings switches described above. Switching the weather card off
+  stops the network requests *and* the location manager — off means off.
 - **Modules** — show or hide the audio visualizer, the audio output row, the
   file shelf, the CPU/memory graphs, the
   agent session lights, and the token/timing figures on those rows. Switching
@@ -160,7 +241,7 @@ no Dock icon, so the gear is the only way in.
   off stops every transcript read. Separately, **Agent light** picks what the
   *collapsed* pill shows: a summary dot (the default), one dot per session, or
   nothing.
-- **About** — version.
+- **About** — version, and **Show the welcome again** to replay the first-run hello.
 
 Standard editing shortcuts (⌘V, ⌘C, ⌘X, ⌘A, ⌘Z) work in the Settings window, and
 ⌘Q there quits Tempo.
@@ -171,11 +252,15 @@ Standard editing shortcuts (⌘V, ⌘C, ⌘X, ⌘A, ⌘Z) work in the Settings w
   - With an external monitor attached, the panel stays on the built-in notch. Close
     the lid and it moves to the menu-bar display as the fallback strip, and back to
     the notch when you open it — plugging, unplugging, and rearranging displays are
-    all followed automatically, no restart.
+    all followed automatically, no restart. If you would rather not see the strip on
+    the external display, switch off Settings ▸ General ▸ *Show the strip on
+    external displays* — the panel still opens when you point at the top middle.
 - Swift toolchain (Command Line Tools are enough — the project builds with SwiftPM,
   no Xcode project)
 - **Spotify desktop app** — only for add-to-playlist. Now-playing and transport
   work with any player through macOS's own media system
+- *(optional)* an internet connection for the weather card — Tempo uses
+  [Open-Meteo](https://open-meteo.com), which needs no account and no API key
 - *(optional)* [AgentStatus](https://github.com/Gameslayer999/AgentStatus) installed —
   its hooks provide the session status Tempo displays. Without it, the lights simply
   don't appear.
@@ -196,10 +281,11 @@ Two one-time permission prompts, both required for full function:
 - **Automation → Spotify** — only for add-to-playlist, which needs Spotify's own
   track id. Now-playing, the transport buttons and the progress bar all work
   without it, for any player.
-- **System Audio Recording** — the audio-reactive visualizer. Tempo taps only
-  Spotify's audio, computes five band levels, and discards the samples; nothing
-  is recorded or stored. Decline it and the visualizer simply falls back to a
-  playback-synced animation.
+- **System Audio Recording** — the audio-reactive visualizer. Tempo taps your
+  Mac's audio output, computes five band levels, and discards the samples;
+  nothing is recorded or stored, and no microphone is ever read. Decline it and
+  the visualizer simply falls back to a playback-synced animation that can only
+  follow the app macOS reports as now-playing.
 
 ### How now-playing works
 
@@ -217,7 +303,10 @@ launch above is the primary run path. `swift build -c release &&
 .build/release/tempo` still works for development, but the bare binary always
 gets the fallback visualizer (the OS silently delivers it zeroed audio). Note:
 the bundle is ad-hoc signed unless an Apple Development identity is in your
-keychain, and macOS may re-ask for the permissions after a rebuild.
+keychain, so a rebuild changes its code identity. macOS then silently delivers
+the tap zeroed audio — the visualizer falls back to the synced animation with no
+prompt and no error. Re-arm the prompt with `tccutil reset AudioCapture
+com.gameslayer999.tempo`, relaunch, and click Allow.
 
 ## One-time Spotify setup (only for add-to-playlist)
 
@@ -265,8 +354,20 @@ Spotify account page).
   `~/Library/Application Support/Tempo/Shelf/` (owner-only) and stay on your
   Mac. Remove an item and the copy is deleted. The shelf's index records file
   names, never the paths you dragged from.
-- No analytics, and the only network calls are Spotify's artwork CDN and (if
-  configured) the Spotify Web API.
+- **Location and weather.** When the weather card is on, Tempo asks for
+  *approximate* location (CoreLocation at reduced accuracy — city-scale, which
+  is all a weather lookup needs) and sends a **rounded coordinate** to
+  Open-Meteo. Nothing else goes with it: no identifier, no device name, no
+  session data. The device's coordinate is **never written to disk** — only a
+  city *you type* has its resolved coordinates cached. Deny location, or switch
+  the weather card off, and the location manager is never started at all.
+- **Lock-screen cards** are ordinary local notifications built on your Mac.
+  Their contents are the weather reading and the track metadata already on
+  screen; nothing is sent anywhere to produce them, and both are withdrawn when
+  you unlock or quit Tempo.
+- No analytics. The only network calls are Spotify's artwork CDN, (if
+  configured) the Spotify Web API, and — if the weather card is on —
+  Open-Meteo's forecast and place-lookup endpoints.
 
 ## Project docs
 

@@ -5,9 +5,11 @@ import SwiftUI
 /// Two modes, chosen per render:
 ///
 /// * **Reactive** — while `AudioTapService` is delivering real levels, each bar
-///   tracks one FFT band of Spotify's actual output.
-/// * **Fallback** — otherwise (no Core Audio tap, unauthorized tap, Spotify not
-///   running), the original playback-synced sine animation from decision 004.
+///   tracks one FFT band of the machine's actual audio output, whichever app
+///   is producing it (decision 056).
+/// * **Fallback** — otherwise (no Core Audio tap, unauthorized tap, macOS
+///   older than 14.2), the playback-synced sine animation from decision 004,
+///   which can only follow the now-playing player's state.
 ///
 /// Both modes render the same single `HStack` of five capsules, so switching
 /// modes resizes the bars instead of replacing them. The `TimelineView` clock is

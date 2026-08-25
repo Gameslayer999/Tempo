@@ -86,8 +86,18 @@ struct ContentView: View {
     @ObservedObject var audio: AudioOutputService
     @ObservedObject var api: SpotifyWebAPI
     @ObservedObject var prefs: Preferences
+    /// Read by the onboarding setup rows for their live grant state; the
+    /// notch itself shows neither.
+    @ObservedObject var lockCards: LockScreenNotifier
+    @ObservedObject var location: LocationService
+    /// The audio tap, for the visualizer-only strip below. Defaulted so the
+    /// call site in AppDelegate stays a plain memberwise init.
+    @ObservedObject var tap = AudioTapService.shared
     /// Opens the Settings window (SettingsWindow.swift), owned by AppDelegate.
     let openSettings: () -> Void
+    /// The first-run hello and setup sequence (decision 057). Owned by
+    /// AppDelegate; the panel is only its stage.
+    @ObservedObject var onboarding: OnboardingController
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -177,12 +187,23 @@ struct ContentView: View {
     /// takes the collapsed pill back down to the bare notch.
     private var showsMedia: Bool { state.isMediaActive }
 
+    /// Real audio is coming out of the machine with no now-playing card to
+    /// show for it — a YouTube tab, a game, a call (decision 056). The strip
+    /// earns a visualizer wing anyway: something *is* playing, and a dead
+    /// notch over live audio reads as broken. No artwork, because there is
+    /// none to show; the leading wing becomes an empty mirror so the notch gap
+    /// stays centred (UI Principle #6).
+    private var showsAudioOnly: Bool { !showsMedia && prefs.showVisualizer && tap.audioActive }
+
+    /// Either reason the pill wears its wings.
+    private var showsWings: Bool { showsMedia || showsAudioOnly }
+
     /// The collapsed pill: notch plus both wings while there is media to put
     /// in them, otherwise exactly the notch — an empty pill is a black bar
     /// hanging past the hardware notch over a light desktop, which is the
     /// thing this state exists to remove.
     private var collapsedWidth: CGFloat {
-        (showsMedia ? pillWidth : notchWidth) + lightSlotWidth * 2
+        (showsWings ? pillWidth : notchWidth) + lightSlotWidth * 2
     }
 
     /// Width of the agent dot(s) themselves (decision 042). Zero when there
@@ -201,7 +222,26 @@ struct ContentView: View {
         return lightLeadingGap + lightWidth + wingOuterInset
     }
 
-    private var lightLeadingGap: CGFloat { showsMedia ? 0 : wingInnerInset }
+    private var lightLeadingGap: CGFloat { showsWings ? 0 : wingInnerInset }
+
+    /// True when the collapsed pill must not be drawn at all: the setting is
+    /// off and there is no hardware notch to hug (decision 055). The panel
+    /// still opens on hover — `NotchHoverDetector` watches the pointer, since
+    /// an undrawn pill claims no clicks and so gets no `onHover` of its own.
+    ///
+    /// Recomputed on every body evaluation, and `state.screenGeneration`
+    /// (bumped by `applyGeometry`) is what forces one after a display change.
+    private var stripHidden: Bool {
+        !prefs.showStripOnExternalDisplays && !NotchGeometry.isHardwareNotch
+    }
+
+    /// Alpha of the whole panel, so the hidden strip fades in as it expands
+    /// rather than appearing at full strength a frame before it grows. Not a
+    /// branch in the hierarchy: the black silhouette is what reports the live
+    /// animated geometry to `NotchHitRegion`, and a view introduced by a
+    /// branch flip does not join an animation already in flight (see
+    /// `backgroundShape`).
+    private var panelOpacity: Double { (stripHidden && !displayedExpanded) ? 0 : 1 }
 
     private var currentWidth: CGFloat { displayedExpanded ? panelWidth : collapsedWidth }
     private var currentHeight: CGFloat {
@@ -229,12 +269,23 @@ struct ContentView: View {
         VStack(spacing: 0) {
             strip
             if displayedExpanded {
-                expandedContent
-                    .transition(.opacity)
+                // Onboarding takes the expanded view's slot rather than
+                // sitting beside it: the first run is not a panel with an
+                // extra section, it is a different thing in the same drawer
+                // (decision 057).
+                Group {
+                    if onboarding.isActive {
+                        onboardingContent
+                    } else {
+                        expandedContent
+                    }
+                }
+                .transition(.opacity)
             }
         }
         .frame(width: currentWidth, height: currentHeight, alignment: .top)
         .background(backgroundShape)
+        .opacity(panelOpacity)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard prefs.showFileShelf else { return false }
             receiveDrop(providers)
@@ -280,10 +331,22 @@ struct ContentView: View {
         // wings with the same spring instead of snapping a chunk of pill out
         // of existence.
         .animation(expandAnimation, value: showsMedia)
+        // Same for audio starting or stopping with no now-playing card behind
+        // it, which grows and retracts the same wings (decision 056).
+        .animation(expandAnimation, value: showsAudioOnly)
         // Same for the agent light slot: a session starting or ending changes
         // the collapsed width, and that has to spring like everything else
         // rather than snapping the pill wider mid-glance.
         .animation(expandAnimation, value: lightSlotWidth)
+        // hello -> setup cards is a real height change, and it has to spring
+        // like every other section change rather than snapping.
+        .animation(expandAnimation, value: onboarding.phase)
+        // The pointer reaching the place the strip would be, when the strip is
+        // not drawn (decision 055). Runs through the same dwell and haptic as
+        // a real hover, so the two entry paths cannot feel different — and the
+        // detector is only ever running in that one mode, so this is inert
+        // everywhere else.
+        .onChange(of: state.isPointerNearNotch) { _, near in handleHover(near) }
     }
 
     /// Collapsed: pure black, always (UI Principle #6 — must keep merging with
@@ -454,11 +517,11 @@ struct ContentView: View {
             if lightSlotWidth > 0 {
                 Color.clear.frame(width: lightSlotWidth, height: stripHeight)
             }
-            if showsMedia {
+            if showsWings {
                 Color.clear
                     .frame(width: wingContentWidth, height: contentSquare)
                     .overlay {
-                        if !displayedExpanded {
+                        if showsMedia, !displayedExpanded {
                             artworkView(side: contentSquare, cornerRadius: 4)
                                 .matchedGeometryEffect(id: Self.artworkID, in: artworkNamespace)
                         }
@@ -469,7 +532,7 @@ struct ContentView: View {
             }
             Spacer()
                 .frame(width: notchWidth)
-            if showsMedia {
+            if showsWings {
                 Color.clear
                     .frame(width: wingContentWidth, height: contentSquare)
                     .overlay {
@@ -560,6 +623,29 @@ struct ContentView: View {
         // branch-inserted view lays out at its final size on the first frame
         // (verified for this codebase — see backgroundShape's comment), so
         // both reports land at expansion start, before the spring arrives.
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { reportExpandedHeight(geo.size.height) }
+                    .onChange(of: geo.size.height) { _, newHeight in
+                        reportExpandedHeight(newHeight)
+                    }
+            }
+        )
+    }
+
+    /// The onboarding sequence, measured and reported exactly like
+    /// `expandedContent` so the panel sizes itself to it and the hit region
+    /// tracks it — the panel does not care which of the two is inside.
+    private var onboardingContent: some View {
+        OnboardingView(
+            onboarding: onboarding,
+            prefs: prefs,
+            api: api,
+            lockCards: lockCards,
+            location: location,
+            openSettings: openSettings
+        )
         .background(
             GeometryReader { geo in
                 Color.clear

@@ -13,9 +13,13 @@ struct SettingsView: View {
     /// Deliberately not an `@ObservedObject` — the Settings window has no
     /// reason to redraw on every playback or session publish.
     let state: AppState
+    @ObservedObject var weather: WeatherService
+    @ObservedObject var location: LocationService
+    @ObservedObject var lockCards: LockScreenNotifier
+    let onboarding: OnboardingController
 
     enum Pane: String, CaseIterable, Identifiable {
-        case general, music, modules, about
+        case general, music, weather, modules, about
 
         var id: String { rawValue }
 
@@ -23,6 +27,7 @@ struct SettingsView: View {
             switch self {
             case .general: return "General"
             case .music: return "Music"
+            case .weather: return "Weather"
             case .modules: return "Modules"
             case .about: return "About"
             }
@@ -32,6 +37,7 @@ struct SettingsView: View {
             switch self {
             case .general: return "gearshape"
             case .music: return "music.note"
+            case .weather: return "cloud.sun"
             case .modules: return "square.grid.2x2"
             case .about: return "info.circle"
             }
@@ -58,8 +64,9 @@ struct SettingsView: View {
         switch selection ?? .general {
         case .general: GeneralPane(prefs: prefs, state: state)
         case .music: MusicPane(api: api, prefs: prefs)
+        case .weather: WeatherPane(prefs: prefs, weather: weather, location: location, lockCards: lockCards)
         case .modules: ModulesPane(prefs: prefs)
-        case .about: AboutPane()
+        case .about: AboutPane(onboarding: onboarding)
         }
     }
 }
@@ -94,6 +101,16 @@ private struct GeneralPane: View {
                         .font(.caption)
                         .foregroundColor(.orange)
                 }
+            }
+
+            Section {
+                Toggle("Show the strip on external displays", isOn: $prefs.showStripOnExternalDisplays)
+            } header: {
+                Text("Displays")
+            } footer: {
+                Text("Tempo always hugs the built-in display's notch when that display is available. This governs the other case — the lid closed, or a Mac with no notch at all — where Tempo falls back to a small strip at the top of whichever display carries the menu bar. Off hides that strip: the panel still opens when you move the pointer to the top middle of the display, it just isn't drawn until then, and clicks there go straight through to whatever is behind it.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             Section {
@@ -455,8 +472,19 @@ private struct ModulesPane: View {
 // MARK: About
 
 private struct AboutPane: View {
+    let onboarding: OnboardingController
+
     var body: some View {
         Form {
+            Section {
+                LabeledContent("Welcome") {
+                    Button("Show the welcome again") { onboarding.replay() }
+                }
+            } footer: {
+                Text("Replays the first-run hello and the permission steps in the notch.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
             Section {
                 LabeledContent("Version") { Text(version) }
                 LabeledContent("Agent status") { Text("~/.claude/status (read-only)") }
@@ -476,5 +504,147 @@ private struct AboutPane: View {
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         guard let short else { return "development build" }
         return build.map { "\(short) (\($0))" } ?? short
+    }
+}
+
+// MARK: Weather
+
+/// The lock-screen cards and where their weather comes from (decisions 058,
+/// 059).
+///
+/// This pane carries the one thing Tempo cannot do for itself: two switches in
+/// System Settings decide whether a delivered card is *legible* on the lock
+/// screen, and neither is ours to set. It says so plainly rather than letting
+/// a granted-but-invisible card read as a broken feature.
+private struct WeatherPane: View {
+    @ObservedObject var prefs: Preferences
+    @ObservedObject var weather: WeatherService
+    @ObservedObject var location: LocationService
+    @ObservedObject var lockCards: LockScreenNotifier
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Show cards on the lock screen", isOn: $prefs.showLockScreenCards)
+                Toggle("Weather", isOn: $prefs.lockCardShowsWeather)
+                    .disabled(!prefs.showLockScreenCards)
+                Toggle("What's playing", isOn: $prefs.lockCardShowsMusic)
+                    .disabled(!prefs.showLockScreenCards)
+            } header: {
+                Text("Lock screen")
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Tempo cannot draw on the lock screen — macOS composites it in a secure context that excludes app windows. These are ordinary notifications, posted when the screen locks, updated in place while it stays locked, and withdrawn when you unlock.")
+                    authorizationNote
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+
+            Section {
+                Toggle("Use my location", isOn: $prefs.weatherUseLocation)
+                    .disabled(!weatherActive)
+                TextField("City", text: $prefs.weatherCity, prompt: Text("Hoboken"))
+                    .disabled(!weatherActive)
+                Picker("Units", selection: $prefs.weatherUnit) {
+                    ForEach(TemperatureUnit.allCases) { unit in
+                        Text(unit.title).tag(unit)
+                    }
+                }
+                .disabled(!weatherActive)
+            } header: {
+                Text("Location")
+            } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    if location.isResolvingCity {
+                        Text("Looking up that city…")
+                    } else if let failure = location.cityLookupFailure {
+                        Text(failure)
+                    } else if let place = location.place {
+                        Text(place.name.isEmpty
+                             ? "Using \(coordinateText(place))."
+                             : "Using \(place.name).")
+                    }
+                    locationNote
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+
+            Section {
+                LabeledContent("Now") {
+                    HStack(spacing: 6) {
+                        if let reading = weather.reading {
+                            Image(systemName: reading.symbolName)
+                            Text(reading.summary)
+                        } else {
+                            Text(weatherActive ? (weather.failure ?? "Loading…") : "Weather is off.")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                Button("Refresh") { weather.fetch() }
+                    .disabled(!weatherActive)
+            } header: {
+                Text("Current conditions")
+            } footer: {
+                Text("Weather comes from Open-Meteo, which needs no account and no key. Tempo sends it a rounded coordinate and nothing else — no identifier, and never your Mac's name or your session data.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Whether anything weather-related is actually running — both switches.
+    private var weatherActive: Bool { prefs.showLockScreenCards && prefs.lockCardShowsWeather }
+
+    @ViewBuilder
+    private var authorizationNote: some View {
+        switch lockCards.authorization {
+        case .authorized, .provisional, .ephemeral:
+            // Granted is not sufficient, and this is the trap the feature dies
+            // in silently: the *default* preview setting renders a locked card
+            // as a contentless "Tempo · Notification".
+            HStack(spacing: 6) {
+                Text("Allowed. In System Settings ▸ Notifications ▸ Tempo, also turn on **Show on Lock Screen** and set **Show previews** to *Always*, or the cards appear locked but blank.")
+                Button("Open") { LockScreenNotifier.openSystemNotificationSettings() }
+                    .buttonStyle(.link)
+            }
+        case .denied:
+            HStack(spacing: 6) {
+                Text("Notifications are turned off for Tempo, so no card can be posted.")
+                Button("Open Notification settings") { LockScreenNotifier.openSystemNotificationSettings() }
+                    .buttonStyle(.link)
+            }
+        default:
+            HStack(spacing: 6) {
+                Text("Tempo has not asked for notification permission yet.")
+                Button("Ask now") { Task { await lockCards.requestAuthorization() } }
+                    .buttonStyle(.link)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var locationNote: some View {
+        switch location.authorization {
+        case .denied, .restricted:
+            Text("Location access is off, so the typed city is used. Turn it back on in System Settings ▸ Privacy & Security ▸ Location Services.")
+        case .notDetermined:
+            if prefs.weatherUseLocation {
+                Text("macOS will ask for approximate location the first time weather is fetched. Until then, the typed city is used.")
+            } else {
+                Text("Weather uses the typed city.")
+            }
+        default:
+            if !prefs.weatherUseLocation {
+                Text("Weather uses the typed city.")
+            }
+        }
+    }
+
+    private func coordinateText(_ place: WeatherPlace) -> String {
+        String(format: "%.2f, %.2f", place.latitude, place.longitude)
     }
 }
