@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Dynamic-Island-style visualizer beside the notch.
@@ -19,8 +20,24 @@ import SwiftUI
 /// ~93 MB Metal allocation.
 struct VisualizerView: View {
     let isPlaying: Bool
+    /// The current cover's dominant colour, for the `.album` palette. Optional
+    /// because the strip draws before any artwork has loaded — and because
+    /// there may never be any.
+    let artworkTint: NSColor?
 
+    @ObservedObject private var prefs: Preferences
     @ObservedObject private var tap = AudioTapService.shared
+    /// The visualizer is continuous motion with no end state — precisely what
+    /// Reduce Motion exists to switch off, and the one animation in Tempo
+    /// that was still running under it (the panel's spring and the onboarding
+    /// stroke both already honour it).
+    ///
+    /// It cannot simply stop, because motion *is* this element's whole signal:
+    /// a frozen bar row beside a playing track is the stale signal UI
+    /// Principle #4 forbids. So the meaning is re-encoded as *height* instead
+    /// — a static raised profile while audio is playing, a flat row when it
+    /// is not. Same binary read at a glance, zero movement.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let barCount = 5
     private static let barWidth: CGFloat = 3
@@ -56,28 +73,29 @@ struct VisualizerView: View {
     /// same lie in a different mode.
     private var animating: Bool { isPlaying && tap.outputAudible }
 
-    init(isPlaying: Bool) {
+    /// `artworkTint` and `prefs` both default, so the strip's existing call
+    /// site keeps compiling unchanged; pass the real cover tint to make the
+    /// `.album` palette do anything.
+    ///
+    /// `prefs` defaults through `nil` rather than to `.shared` directly because
+    /// a default-argument expression is evaluated outside the initializer's
+    /// isolation, and `Preferences.shared` is `@MainActor`.
+    @MainActor
+    init(isPlaying: Bool, artworkTint: NSColor? = nil, prefs: Preferences? = nil) {
         self.isPlaying = isPlaying
+        self.artworkTint = artworkTint
+        self.prefs = prefs ?? .shared
     }
 
     var body: some View {
-        let reactive = tap.isCapturing
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0,
-                                paused: reactive || (!animating && settled))) { context in
-            HStack(spacing: Self.barSpacing) {
-                ForEach(0..<Self.barCount, id: \.self) { index in
-                    Capsule()
-                        .fill(Color.white.opacity(0.92))
-                        .frame(width: Self.barWidth,
-                               height: Self.maxBarHeight * fraction(index: index,
-                                                               reactive: reactive,
-                                                               date: context.date))
-                }
+        Group {
+            if reduceMotion {
+                still
+            } else {
+                live
             }
-            // 30 Hz level updates interpolate across one frame interval so the
-            // bars read as continuous motion instead of a step sequence.
-            .animation(reactive ? .linear(duration: 1.0 / 30.0) : nil, value: tap.bands)
         }
+        .accessibilityLabel(animating ? "Audio playing" : "Audio stopped")
         .task(id: animating) {
             // Only a real change in whether the bars should be moving
             // starts a transition. `.task(id:)`
@@ -104,6 +122,96 @@ struct VisualizerView: View {
             if !Task.isCancelled { settled = true }
         }
     }
+
+    /// The moving visualizer: reactive bands when the tap is delivering them,
+    /// the sine fallback otherwise.
+    private var live: some View {
+        let reactive = tap.isCapturing
+        return TimelineView(.animation(minimumInterval: 1.0 / 30.0,
+                                       paused: reactive || (!animating && settled))) { context in
+            bars { index in
+                fraction(index: index, reactive: reactive, date: context.date)
+            }
+            // 30 Hz level updates interpolate across one frame interval so the
+            // bars read as continuous motion instead of a step sequence.
+            .animation(reactive ? .linear(duration: 1.0 / 30.0) : nil, value: tap.bands)
+        }
+    }
+
+    /// Reduce Motion: no clock at all, so the row is genuinely static rather
+    /// than animating slowly. Playing draws a fixed asymmetric profile — bass
+    /// tallest in the centre, exactly where the moving version puts it, so the
+    /// shape is recognisably the same element — and silence draws the flat
+    /// stub row. Crossing between them is a single eased height change, which
+    /// is a state transition rather than ongoing motion, and is what the HIG
+    /// asks for in place of a loop.
+    private var still: some View {
+        bars { index in animating ? Self.staticProfile[index] : minFraction }
+            .animation(.easeInOut(duration: 0.2), value: animating)
+    }
+
+    /// Height fractions of the resting "audio is playing" silhouette.
+    private static let staticProfile: [CGFloat] = [0.45, 0.72, 1.0, 0.72, 0.45]
+
+    private func bars(_ height: @escaping (Int) -> CGFloat) -> some View {
+        HStack(spacing: Self.barSpacing) {
+            ForEach(0..<Self.barCount, id: \.self) { index in
+                Capsule()
+                    .fill(fill(bar: index))
+                    .frame(width: Self.barWidth, height: Self.maxBarHeight * height(index))
+            }
+        }
+    }
+
+    // MARK: - Colour
+
+    /// The fill every bar had before decision 071, and still the default. Also
+    /// the fallback for `.album` with no cover, because the alternative — a bar
+    /// row that changes colour depending on whether artwork happened to have
+    /// loaded yet — is the flicker UI Principle #1 is about.
+    private static let monochrome = Color.white.opacity(0.92)
+
+    /// One bar's fill (decision 071). Colour only: nothing here reads
+    /// `animating`, `reduceMotion` or the clock, so a palette can neither start
+    /// motion Reduce Motion suppressed nor keep the bars from settling — the
+    /// height functions remain the sole source of both.
+    private func fill(bar index: Int) -> Color {
+        switch prefs.spectrogramPalette {
+        case .monochrome:
+            return Self.monochrome
+        case .accent:
+            return NotchAccent.color(for: prefs)
+        case .album:
+            // Through the same legibility clamp the accent uses:
+            // `NSImage.dominantColor()` floors HSB *brightness* at 0.6, which
+            // for a saturated blue cover is still only 1.05:1 against the dark
+            // panel — bars that are technically drawn and practically gone.
+            guard let artworkTint else { return Self.monochrome }
+            return Color(nsColor: NotchAccent.legible(artworkTint))
+        case .spectrum:
+            return Self.spectrum[Self.barToBand[index]]
+        }
+    }
+
+    /// A hue per **band**, bass → treble — indexed by band, not by bar, so the
+    /// ramp follows frequency the way `barToBand` lays it out: warm in the
+    /// centre where the bass sits, cooling outward. Indexing by bar instead
+    /// would paint a left-to-right gradient across a row whose heights are
+    /// arranged around the middle, and the two orderings would visibly disagree.
+    ///
+    /// Fixed sRGB values rather than a runtime clamp: all five are chosen at a
+    /// common saturation 0.58 / brightness 1.0, the most saturated the ramp can
+    /// be while its darkest member still clears 4.5:1 on the dark panel. Against
+    /// the backdrop `NotchAccent` models — bass 6.10:1, low-mid 10.59:1, mid
+    /// 11.92:1, upper-mid 9.97:1, treble 4.77:1 — so they need no clamp under
+    /// either contrast setting.
+    private static let spectrum: [Color] = [
+        Color(red: 1.00, green: 0.50, blue: 0.42), // bass       hue   8°
+        Color(red: 1.00, green: 0.83, blue: 0.42), // low-mid    hue  42°
+        Color(red: 0.42, green: 1.00, blue: 0.71), // mid        hue 150°
+        Color(red: 0.42, green: 0.88, blue: 1.00), // upper-mid  hue 192°
+        Color(red: 0.73, green: 0.42, blue: 1.00), // treble     hue 272°
+    ]
 
     /// Height fraction (of `maxBarHeight`) for one bar.
     private func fraction(index: Int, reactive: Bool, date: Date) -> CGFloat {

@@ -24,6 +24,10 @@ struct NotchButtonStyle: ButtonStyle {
     static let hoverFill: Double = 0.18
     static let pressedFill: Double = 0.28
     static let hoverStroke: Double = 0.60
+    /// What a control shows at rest under Increase Contrast, so it is a
+    /// visible control rather than a glyph waiting to be discovered.
+    static let restingFill: Double = 0.10
+    static let restingStroke: Double = 0.45
     static let hoverAnimation: Animation = .smooth(duration: 0.3)
 
     func makeBody(configuration: Configuration) -> some View {
@@ -37,12 +41,24 @@ struct NotchButtonStyle: ButtonStyle {
         let scales: Bool
 
         @State private var isHovered = false
+        /// Increase Contrast means "show me where the controls are". At rest
+        /// these buttons are bare glyphs with no plate at all — findable by
+        /// hovering, which is exactly the discovery the setting exists to
+        /// remove (HIG ▸ Accessibility). Turned on, every control keeps a
+        /// resting fill and border whether or not the pointer is near it.
+        @Environment(\.colorSchemeContrast) private var contrast
+        /// The 6% hover growth and the 12% press shrink are decoration, not
+        /// information — the fill and the outline already carry both states —
+        /// so Reduce Motion drops them entirely.
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        private var highContrast: Bool { contrast == .increased }
 
         var body: some View {
             configuration.label
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .frame(minWidth: 28, minHeight: 28)
+                .frame(minWidth: NotchMetrics.hitTarget, minHeight: NotchMetrics.hitTarget)
                 .background(Capsule().fill(Color.primary.opacity(fillOpacity)))
                 // Outline on hover, marking the hit area — the same treatment
                 // the playlist picker already mirrors from these buttons, now
@@ -50,20 +66,31 @@ struct NotchButtonStyle: ButtonStyle {
                 // (transport, gear, agent lights) highlights identically.
                 .overlay(
                     Capsule().strokeBorder(
-                        Color.primary.opacity(isHovered ? NotchButtonStyle.hoverStroke : 0),
+                        Color.primary.opacity(strokeOpacity),
                         lineWidth: 1.5
                     )
                 )
                 .contentShape(Rectangle())
-                .scaleEffect(scales ? (configuration.isPressed ? 0.88 : (isHovered ? 1.06 : 1.0)) : 1.0)
+                .scaleEffect(scaleFactor)
                 .animation(NotchButtonStyle.hoverAnimation, value: isHovered)
                 .animation(.smooth(duration: 0.12), value: configuration.isPressed)
                 .onHover { isHovered = $0 }
         }
 
+        private var scaleFactor: CGFloat {
+            guard scales, !reduceMotion else { return 1.0 }
+            return configuration.isPressed ? 0.88 : (isHovered ? 1.06 : 1.0)
+        }
+
         private var fillOpacity: Double {
             if configuration.isPressed { return NotchButtonStyle.pressedFill }
-            return isHovered ? NotchButtonStyle.hoverFill : 0
+            if isHovered { return NotchButtonStyle.hoverFill }
+            return highContrast ? NotchButtonStyle.restingFill : 0
+        }
+
+        private var strokeOpacity: Double {
+            if isHovered { return NotchButtonStyle.hoverStroke }
+            return highContrast ? NotchButtonStyle.restingStroke : 0
         }
     }
 }

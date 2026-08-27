@@ -149,6 +149,18 @@ final class MediaRemoteService: ObservableObject {
     /// launches. Only processes running *this* adapter path whose parent is
     /// already `launchd` (ppid 1) are killed, so a live stream owned by a
     /// running Tempo is never touched.
+    ///
+    /// The path comparison is **case-insensitive**, and that is not
+    /// belt-and-braces. `Bundle.main.resourcePath` reports the bundle the way
+    /// it was reached: through LaunchServices (`open`) it is the canonical
+    /// on-disk case, but exec'd straight off the path a shell happened to be
+    /// sitting in — the dev route — it keeps that shell's spelling. On a
+    /// case-insensitive filesystem both spellings name the same file and both
+    /// turn up in `ps`, so an exact compare silently skipped every orphan
+    /// whose spelling differed from the running bundle's. Measured: an adapter
+    /// left by a directly-exec'd Tempo survived six hours and every relaunch
+    /// in between, because each reaping Tempo had been started by `open` and
+    /// was comparing the other case (decision 068).
     private func reapOrphanedStreams() {
         guard let script = Self.adapterPaths?.script else { return }
         commandQueue.async {
@@ -168,7 +180,7 @@ final class MediaRemoteService: ObservableObject {
                 guard fields.count >= 3,
                       let pid = pid_t(fields[0]),
                       fields[1] == "1",
-                      line.contains(script),
+                      line.range(of: script, options: .caseInsensitive) != nil,
                       line.contains("stream")
                 else { continue }
                 kill(pid, SIGTERM)
@@ -424,7 +436,13 @@ final class MediaRemoteService: ObservableObject {
     /// How long after playback stops the media UI stays up. Deliberately not
     /// instant: a pause to take a call, a scrub, or an app switch is a gap in
     /// playback, not the end of listening (UI Principle #4).
-    static let mediaIdleTimeout: TimeInterval = 60
+    ///
+    /// This was a fixed 60s until decision 073 made it a setting — the right
+    /// value was always a matter of taste, and boringNotch exposes the same
+    /// knob. `Preferences.defaultMediaIdleSeconds` is still 60, so an install
+    /// that never touches the slider behaves exactly as it did before
+    /// (Agent Guideline #7). 0 means never drop it.
+    static var mediaIdleTimeout: TimeInterval { Preferences.shared.mediaIdleSeconds }
 
     /// Shows the media UI while something is playing and for
     /// `mediaIdleTimeout` after it stops (decision 038).
@@ -439,7 +457,12 @@ final class MediaRemoteService: ObservableObject {
 
         guard state.isMediaActive else { return }
 
-        let t = Timer.scheduledTimer(withTimeInterval: Self.mediaIdleTimeout, repeats: false) { [weak self] _ in
+        // 0 means the media UI never times out — leave it up with no timer
+        // rather than scheduling one that would fire immediately.
+        let timeout = Self.mediaIdleTimeout
+        guard timeout > 0 else { return }
+
+        let t = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 self?.state.isMediaActive = false
                 self?.idleTimer = nil

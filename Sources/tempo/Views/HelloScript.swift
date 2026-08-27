@@ -1,20 +1,35 @@
 import SwiftUI
 
-/// The cursive word "hello", as one continuous stroke that can be drawn on
-/// (decision 057).
+/// The cursive word "hello" — Apple's own lettering — as a stroke that can be
+/// drawn on (decisions 057, 060, 061).
 ///
-/// Authored as a single unbroken path — pen down at the foot of the `h`, pen
-/// up at the end of the `o`'s flourish — because that is the whole point:
-/// `.trim(from: 0, to: progress)` walks one subpath by arc length, so a single
-/// stroke writes itself letter by letter the way a hand would. Split into five
-/// per-letter subpaths it would instead draw all five at once, each a fifth of
-/// the way along.
+/// The geometry is Apple's `hello-en` artwork, which ships as *centreline*
+/// paths (`fill="none" stroke-width="60" stroke-linecap="round"`), not as
+/// filled glyph outlines. That is the whole reason it can be used here: a
+/// filled outline trimmed by `trimmedPath` would draw its own contour, whereas
+/// a centreline trimmed by arc length writes itself the way a pen does.
 ///
-/// Coordinates are in a fixed 640 x 230 design box (`designSize`) and scaled to
-/// whatever frame the view gets, preserving aspect. The control points were
-/// tuned by rendering the curve and looking at it, not by arithmetic.
+/// Two earlier hand-authored passes were replaced by this. What they got wrong,
+/// measured against the real thing:
+/// - **Proportion.** Apple's word is 3.36 : 1 (width : height). Both hand-drawn
+///   passes were about 1.5 : 1 — the letters were cramped to under half their
+///   proper width, which is what made it read as the wrong word-shape.
+/// - **Curvature.** The ascenders were long straight diagonals; Apple's are
+///   continuously curving, with no straight run anywhere in the word.
+/// - **Weight.** Apple strokes at 8% of the word's height (`strokeRatio`). The
+///   hand-drawn passes used a 3pt hairline, roughly a third of that.
+///
+/// Apple splits the word into two subpaths — the `h`'s entry-and-ascender, then
+/// everything from the `h`'s stem through the `o` — and they meet end to end
+/// (subpath 0 finishes at ≈(49, 198), subpath 1 opens at ≈(50, 188)). They are
+/// therefore drawn *in sequence*, weighted by arc length, so the pen reads as
+/// one continuous hand. Trimming a single `Path` holding both would instead
+/// advance both at once — two parts of the word appearing together, which is
+/// exactly the failure mode the original single-subpath authoring avoided.
+///
+/// Design coordinates are y-down, normalised so the artwork is 200 units tall.
 struct HelloScript: Shape {
-    /// How much of the stroke has been drawn, 0...1.
+    /// How much of the word has been drawn, 0...1, across both subpaths.
     var progress: CGFloat
 
     var animatableData: CGFloat {
@@ -22,74 +37,197 @@ struct HelloScript: Shape {
         set { progress = newValue }
     }
 
-    /// The design box the control points below are expressed in.
-    static let designSize = CGSize(width: 588, height: 238)
-    /// Origin of that box within the raw coordinates (the curve was authored
-    /// on a larger canvas and is shifted back here rather than re-typed).
-    private static let designOrigin = CGPoint(x: 44, y: 14)
+    /// Apple's stroke weight, as a fraction of the design height.
+    static let strokeRatio: CGFloat = 0.0804
 
-    /// Start point, then one `(control1, control2, end)` triple per cubic
-    /// segment, in raw authoring coordinates.
-    private static let start = CGPoint(x: 78, y: 220)
-    private static let segments: [(CGPoint, CGPoint, CGPoint)] = [
-        // h — the ascender goes up, loops over, and comes back to the baseline…
-        (CGPoint(x: 58, y: 152), CGPoint(x: 56, y: 76), CGPoint(x: 100, y: 46)),
-        (CGPoint(x: 132, y: 25), CGPoint(x: 148, y: 70), CGPoint(x: 136, y: 116)),
-        (CGPoint(x: 127, y: 152), CGPoint(x: 116, y: 186), CGPoint(x: 116, y: 220)),
-        // …then the shoulder.
-        (CGPoint(x: 122, y: 176), CGPoint(x: 146, y: 144), CGPoint(x: 176, y: 148)),
-        (CGPoint(x: 202, y: 152), CGPoint(x: 206, y: 182), CGPoint(x: 200, y: 220)),
-        // e — up into the eye, around it, and out to the right.
-        (CGPoint(x: 214, y: 204), CGPoint(x: 230, y: 170), CGPoint(x: 251, y: 152)),
-        (CGPoint(x: 272, y: 135), CGPoint(x: 290, y: 149), CGPoint(x: 279, y: 173)),
-        (CGPoint(x: 268, y: 197), CGPoint(x: 234, y: 198), CGPoint(x: 216, y: 188)),
-        (CGPoint(x: 208, y: 216), CGPoint(x: 234, y: 234), CGPoint(x: 264, y: 229)),
-        (CGPoint(x: 290, y: 224), CGPoint(x: 306, y: 209), CGPoint(x: 318, y: 192)),
-        // l — a tall narrow loop.
-        (CGPoint(x: 312, y: 146), CGPoint(x: 314, y: 84), CGPoint(x: 334, y: 52)),
-        (CGPoint(x: 350, y: 26), CGPoint(x: 374, y: 35), CGPoint(x: 368, y: 71)),
-        (CGPoint(x: 361, y: 113), CGPoint(x: 338, y: 153), CGPoint(x: 332, y: 197)),
-        (CGPoint(x: 328, y: 222), CGPoint(x: 348, y: 234), CGPoint(x: 372, y: 223)),
-        // l — and the second one.
-        (CGPoint(x: 392, y: 170), CGPoint(x: 394, y: 90), CGPoint(x: 414, y: 54)),
-        (CGPoint(x: 430, y: 27), CGPoint(x: 454, y: 37), CGPoint(x: 448, y: 73)),
-        (CGPoint(x: 441, y: 115), CGPoint(x: 418, y: 155), CGPoint(x: 412, y: 199)),
-        (CGPoint(x: 408, y: 224), CGPoint(x: 428, y: 236), CGPoint(x: 452, y: 225)),
-        // o — round, closing on itself, then the short exit tick. Apple's
-        //     hello ends on a tick, not a long flourish; a trailing swash was
-        //     the most obviously wrong thing about the first pass.
-        (CGPoint(x: 474, y: 213), CGPoint(x: 486, y: 193), CGPoint(x: 508, y: 177)),
-        (CGPoint(x: 537, y: 157), CGPoint(x: 574, y: 167), CGPoint(x: 576, y: 197)),
-        (CGPoint(x: 578, y: 225), CGPoint(x: 547, y: 241), CGPoint(x: 521, y: 232)),
-        (CGPoint(x: 497, y: 223), CGPoint(x: 492, y: 195), CGPoint(x: 510, y: 177)),
-        (CGPoint(x: 530, y: 156), CGPoint(x: 562, y: 158), CGPoint(x: 586, y: 180)),
-        (CGPoint(x: 598, y: 190), CGPoint(x: 606, y: 186), CGPoint(x: 612, y: 172)),
+    // MARK: Geometry
+
+    /// `(start, curves)` per subpath, in design coordinates.
+    private static let subpathData: [(CGPoint, [(CGPoint, CGPoint, CGPoint)])] = [
+        (
+            CGPoint(x: 0.0, y: 171.9),
+            [
+                (CGPoint(x: 29.8, y: 155.3), CGPoint(x: 56.9, y: 134.1), CGPoint(x: 87.6, y: 97.9)),
+                (CGPoint(x: 108.6, y: 73.1), CGPoint(x: 119.8, y: 44.9), CGPoint(x: 120.4, y: 25.5)),
+                (CGPoint(x: 120.6, y: 11.0), CGPoint(x: 113.6, y: 0.0), CGPoint(x: 100.5, y: 0.0)),
+                (CGPoint(x: 86.1, y: 0.0), CGPoint(x: 76.9, y: 11.0), CGPoint(x: 71.3, y: 36.2)),
+                (CGPoint(x: 65.2, y: 63.9), CGPoint(x: 60.6, y: 95.7), CGPoint(x: 49.1, y: 197.6)),
+            ]
+        ),
+        (
+            CGPoint(x: 50.2, y: 187.6),
+            [
+                (CGPoint(x: 56.1, y: 135.8), CGPoint(x: 78.6, y: 97.9), CGPoint(x: 107.2, y: 97.9)),
+                (CGPoint(x: 124.4, y: 97.9), CGPoint(x: 135.3, y: 111.5), CGPoint(x: 132.2, y: 131.1)),
+                (CGPoint(x: 130.5, y: 142.6), CGPoint(x: 128.4, y: 154.4), CGPoint(x: 126.1, y: 168.1)),
+                (CGPoint(x: 123.3, y: 185.3), CGPoint(x: 131.2, y: 198.7), CGPoint(x: 154.9, y: 198.7)),
+                (CGPoint(x: 189.6, y: 198.7), CGPoint(x: 227.4, y: 179.4), CGPoint(x: 246.7, y: 149.6)),
+                (CGPoint(x: 253.3, y: 139.4), CGPoint(x: 256.0, y: 130.3), CGPoint(x: 256.3, y: 121.5)),
+                (CGPoint(x: 256.5, y: 105.4), CGPoint(x: 247.4, y: 93.3), CGPoint(x: 231.3, y: 93.3)),
+                (CGPoint(x: 211.0, y: 93.3), CGPoint(x: 195.4, y: 116.4), CGPoint(x: 195.4, y: 145.9)),
+                (CGPoint(x: 195.4, y: 177.5), CGPoint(x: 212.6, y: 199.7), CGPoint(x: 249.0, y: 199.7)),
+                (CGPoint(x: 298.5, y: 199.7), CGPoint(x: 353.4, y: 140.3), CGPoint(x: 378.6, y: 73.9)),
+                (CGPoint(x: 385.7, y: 55.2), CGPoint(x: 388.4, y: 37.8), CGPoint(x: 388.4, y: 25.6)),
+                (CGPoint(x: 388.4, y: 11.2), CGPoint(x: 383.9, y: 0.1), CGPoint(x: 371.0, y: 0.1)),
+                (CGPoint(x: 358.4, y: 0.1), CGPoint(x: 350.1, y: 9.9), CGPoint(x: 342.6, y: 25.4)),
+                (CGPoint(x: 333.8, y: 43.3), CGPoint(x: 327.3, y: 69.1), CGPoint(x: 324.6, y: 98.3)),
+                (CGPoint(x: 317.9, y: 171.6), CGPoint(x: 332.9, y: 198.7), CGPoint(x: 368.6, y: 198.7)),
+                (CGPoint(x: 411.9, y: 198.7), CGPoint(x: 460.0, y: 138.4), CGPoint(x: 484.6, y: 73.7)),
+                (CGPoint(x: 491.6, y: 55.2), CGPoint(x: 494.3, y: 37.8), CGPoint(x: 494.3, y: 25.6)),
+                (CGPoint(x: 494.3, y: 11.2), CGPoint(x: 489.7, y: 0.1), CGPoint(x: 476.9, y: 0.1)),
+                (CGPoint(x: 464.3, y: 0.1), CGPoint(x: 456.0, y: 9.9), CGPoint(x: 448.4, y: 25.4)),
+                (CGPoint(x: 439.7, y: 43.3), CGPoint(x: 433.2, y: 69.1), CGPoint(x: 430.5, y: 98.3)),
+                (CGPoint(x: 423.8, y: 171.6), CGPoint(x: 438.8, y: 198.7), CGPoint(x: 470.7, y: 198.7)),
+                (CGPoint(x: 502.5, y: 198.7), CGPoint(x: 519.8, y: 170.9), CGPoint(x: 530.1, y: 141.5)),
+                (CGPoint(x: 540.4, y: 112.4), CGPoint(x: 553.0, y: 94.4), CGPoint(x: 579.3, y: 94.4)),
+                (CGPoint(x: 601.0, y: 94.4), CGPoint(x: 618.1, y: 110.5), CGPoint(x: 618.1, y: 140.8)),
+                (CGPoint(x: 618.1, y: 174.3), CGPoint(x: 596.4, y: 199.5), CGPoint(x: 568.9, y: 199.7)),
+                (CGPoint(x: 544.7, y: 200.0), CGPoint(x: 528.9, y: 180.4), CGPoint(x: 530.5, y: 150.9)),
+                (CGPoint(x: 532.3, y: 118.2), CGPoint(x: 552.2, y: 94.4), CGPoint(x: 578.2, y: 94.4)),
+                (CGPoint(x: 593.2, y: 94.4), CGPoint(x: 605.8, y: 101.1), CGPoint(x: 615.7, y: 108.3)),
+                (CGPoint(x: 642.6, y: 127.9), CGPoint(x: 663.3, y: 115.8), CGPoint(x: 671.2, y: 96.4)),
+            ]
+        ),
     ]
 
+    private static let subpaths: [Path] = subpathData.map { start, curves in
+        var path = Path()
+        path.move(to: start)
+        for (control1, control2, end) in curves {
+            path.addCurve(to: end, control1: control1, control2: control2)
+        }
+        return path
+    }
+
+    /// Each subpath's share of the total arc length. This is what makes the two
+    /// of them read as one pen: `progress` is spent on subpath 0 in proportion
+    /// to how much of the ink it actually is, not 50/50.
+    private static let shares: [CGFloat] = {
+        let lengths = subpaths.map(arcLength(of:))
+        let total = lengths.reduce(0, +)
+        guard total > 0 else { return lengths.map { _ in 0 } }
+        return lengths.map { $0 / total }
+    }()
+
+    /// The ink's own bounds, grown by half a stroke on every side so the
+    /// rounded caps and the outer edge of the stroke stay inside the frame
+    /// rather than being clipped by it.
+    private static let designBounds: CGRect = {
+        guard let first = subpaths.first else { return .zero }
+        let union = subpaths.dropFirst().reduce(first.boundingRect) { $0.union($1.boundingRect) }
+        let bleed = union.height * strokeRatio / 2
+        return union.insetBy(dx: -bleed, dy: -bleed)
+    }()
+
+    // MARK: Layout
+
+    /// The stroke width to draw with, for a view of `size` — derived from the
+    /// same fit the shape itself performs, so the two cannot drift apart.
+    static func lineWidth(fitting size: CGSize) -> CGFloat {
+        designBounds.height * strokeRatio * scale(fitting: size)
+    }
+
+    private static func scale(fitting size: CGSize) -> CGFloat {
+        guard designBounds.width > 0, designBounds.height > 0 else { return 0 }
+        return min(size.width / designBounds.width, size.height / designBounds.height)
+    }
+
     func path(in rect: CGRect) -> Path {
+        let bounds = Self.designBounds
+        guard rect.width > 0, rect.height > 0, bounds.width > 0, bounds.height > 0 else { return Path() }
+
         // Uniform scale, centred — the word must never stretch to the panel's
         // aspect ratio.
-        let scale = min(rect.width / Self.designSize.width, rect.height / Self.designSize.height)
-        let drawn = CGSize(width: Self.designSize.width * scale, height: Self.designSize.height * scale)
-        let offset = CGPoint(
-            x: rect.minX + (rect.width - drawn.width) / 2,
-            y: rect.minY + (rect.height - drawn.height) / 2
-        )
-
-        func place(_ point: CGPoint) -> CGPoint {
-            CGPoint(
-                x: offset.x + (point.x - Self.designOrigin.x) * scale,
-                y: offset.y + (point.y - Self.designOrigin.y) * scale
+        let scale = Self.scale(fitting: rect.size)
+        let drawn = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        let transform = CGAffineTransform.identity
+            .translatedBy(
+                x: rect.minX + (rect.width - drawn.width) / 2,
+                y: rect.minY + (rect.height - drawn.height) / 2
             )
-        }
+            .scaledBy(x: scale, y: scale)
+            .translatedBy(x: -bounds.minX, y: -bounds.minY)
 
-        var path = Path()
-        path.move(to: place(Self.start))
-        for (control1, control2, end) in Self.segments {
-            path.addCurve(to: place(end), control1: place(control1), control2: place(control2))
+        let clamped = max(0, min(progress, 1))
+        var result = Path()
+        var consumed: CGFloat = 0
+        for (index, subpath) in Self.subpaths.enumerated() {
+            let share = Self.shares[index]
+            guard share > 0 else { continue }
+            let local = (clamped - consumed) / share
+            consumed += share
+            guard local > 0 else { break }
+            result.addPath(local >= 1 ? subpath : subpath.trimmedPath(from: 0, to: local))
         }
-        // Trimming here rather than via the `.trim` modifier keeps the shape
-        // self-contained, so `progress` is the only thing a caller animates.
-        return path.trimmedPath(from: 0, to: max(0, min(progress, 1)))
+        return result.applying(transform)
+    }
+
+    // MARK: Arc length
+
+    /// Flattened length of a path. Cubics are sampled rather than solved — this
+    /// runs once, at first use, and only needs to be accurate enough to
+    /// apportion `progress` between the two subpaths.
+    private static func arcLength(of path: Path) -> CGFloat {
+        let samples = 32
+        var total: CGFloat = 0
+        var current = CGPoint.zero
+        var subpathStart = CGPoint.zero
+
+        path.forEach { element in
+            switch element {
+            case let .move(to):
+                current = to
+                subpathStart = to
+            case let .line(to):
+                total += distance(current, to)
+                current = to
+            case let .quadCurve(to, control):
+                var previous = current
+                for step in 1...samples {
+                    let point = quadPoint(current, control, to, CGFloat(step) / CGFloat(samples))
+                    total += distance(previous, point)
+                    previous = point
+                }
+                current = to
+            case let .curve(to, control1, control2):
+                var previous = current
+                for step in 1...samples {
+                    let point = cubicPoint(current, control1, control2, to, CGFloat(step) / CGFloat(samples))
+                    total += distance(previous, point)
+                    previous = point
+                }
+                current = to
+            case .closeSubpath:
+                total += distance(current, subpathStart)
+                current = subpathStart
+            }
+        }
+        return total
+    }
+
+    private static func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = a.x - b.x
+        let dy = a.y - b.y
+        return (dx * dx + dy * dy).squareRoot()
+    }
+
+    private static func cubicPoint(_ p0: CGPoint, _ p1: CGPoint, _ p2: CGPoint, _ p3: CGPoint, _ t: CGFloat) -> CGPoint {
+        let u = 1 - t
+        let a = u * u * u
+        let b = 3 * u * u * t
+        let c = 3 * u * t * t
+        let d = t * t * t
+        return CGPoint(
+            x: a * p0.x + b * p1.x + c * p2.x + d * p3.x,
+            y: a * p0.y + b * p1.y + c * p2.y + d * p3.y
+        )
+    }
+
+    private static func quadPoint(_ p0: CGPoint, _ p1: CGPoint, _ p2: CGPoint, _ t: CGFloat) -> CGPoint {
+        let u = 1 - t
+        return CGPoint(
+            x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+            y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y
+        )
     }
 }

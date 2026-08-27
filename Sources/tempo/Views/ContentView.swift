@@ -93,6 +93,7 @@ struct ContentView: View {
     /// The audio tap, for the visualizer-only strip below. Defaulted so the
     /// call site in AppDelegate stays a plain memberwise init.
     @ObservedObject var tap = AudioTapService.shared
+    @ObservedObject var usage = UsageHistoryService.shared
     /// Opens the Settings window (SettingsWindow.swift), owned by AppDelegate.
     let openSettings: () -> Void
     /// The first-run hello and setup sequence (decision 057). Owned by
@@ -100,6 +101,15 @@ struct ContentView: View {
     @ObservedObject var onboarding: OnboardingController
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Liquid Glass is a transparency effect, and a user who has asked the
+    /// system for less of it must get less of it — the panel falls back to an
+    /// opaque fill (HIG ▸ Materials). Without this the setting did nothing
+    /// here at all.
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    /// `.increased` when the user has turned on Increase Contrast. Deepens
+    /// the scrim under the content and hardens the rim light, so text over a
+    /// bright desktop clears 4.5:1 instead of relying on the glass alone.
+    @Environment(\.colorSchemeContrast) private var contrast
 
     /// Read live rather than captured: the notch dimensions change when a
     /// display is attached, detached, or the lid closes (decision 037), and a
@@ -168,6 +178,12 @@ struct ContentView: View {
     /// therefore spring-animatable — height, and the hit region's expanded
     /// target. The initial value only matters for the first frames of the
     /// very first expansion, before the first measurement lands.
+    /// The track the sneak peek is currently showing, and the timer that
+    /// retracts it (decision 072). Held here rather than in `AppState` because
+    /// nothing outside this view needs it.
+    @State private var sneakPeekTrack: NowPlaying?
+    @State private var sneakPeekTask: Task<Void, Never>?
+
     @State private var expandedContentHeight: CGFloat = 135
 
     /// Measured height of the title/transport/playlist column in the expanded
@@ -240,7 +256,8 @@ struct ContentView: View {
     /// branch in the hierarchy: the black silhouette is what reports the live
     /// animated geometry to `NotchHitRegion`, and a view introduced by a
     /// branch flip does not join an animation already in flight (see
-    /// `backgroundShape`).
+    /// `backgroundShape`). Animated by `fadeAnimation`, not the collapse
+    /// spring — see where it is applied in `body`.
     private var panelOpacity: Double { (stripHidden && !displayedExpanded) ? 0 : 1 }
 
     private var currentWidth: CGFloat { displayedExpanded ? panelWidth : collapsedWidth }
@@ -265,6 +282,12 @@ struct ContentView: View {
             : .spring(response: 0.45, dampingFraction: 1.0)
     }
 
+    /// Curve for `panelOpacity` alone — the panel appearing and disappearing
+    /// where there is no collapsed strip to fall back to (decision 055).
+    /// A short ease rather than the collapse spring, so the alpha is at zero
+    /// while the geometry is still settling instead of trailing behind it.
+    private var fadeAnimation: Animation { .easeOut(duration: reduceMotion ? 0.15 : 0.18) }
+
     var body: some View {
         VStack(spacing: 0) {
             strip
@@ -285,7 +308,6 @@ struct ContentView: View {
         }
         .frame(width: currentWidth, height: currentHeight, alignment: .top)
         .background(backgroundShape)
-        .opacity(panelOpacity)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard prefs.showFileShelf else { return false }
             receiveDrop(providers)
@@ -319,6 +341,9 @@ struct ContentView: View {
             state.isExpanded = true
         }
         .frame(width: panelWidth, height: panelHeight, alignment: .top)
+        .onChange(of: state.nowPlaying?.track) { _, track in
+            showSneakPeek(for: track)
+        }
         .animation(expandAnimation, value: displayedExpanded)
         // A section appearing/disappearing while the panel is open (playlist
         // connects, an agent session starts) re-measures the content and must
@@ -341,6 +366,29 @@ struct ContentView: View {
         // hello -> setup cards is a real height change, and it has to spring
         // like every other section change rather than snapping.
         .animation(expandAnimation, value: onboarding.phase)
+        // Deliberately outside every `expandAnimation` above: the panel's own
+        // alpha must not inherit the collapse spring. On that curve the
+        // critically damped tail left a dim ghost of the panel sitting over
+        // the menu bar for roughly half a second after it had finished
+        // retracting (decision 065). Placed here, the modifiers above are the
+        // closer animation for the frame and shape, so only the alpha takes
+        // `fadeAnimation`.
+        .opacity(panelOpacity)
+        .animation(fadeAnimation, value: panelOpacity)
+        // Deliberately *outside* `panelOpacity`, and this is load-bearing.
+        // Inside it, the peek inherited the hidden strip's alpha of 0: in
+        // clamshell on a notchless display with "Show the strip on external
+        // displays" off, `stripHidden` is true whenever the panel is
+        // collapsed, so the peek was rendered at zero alpha every time it
+        // fired and the feature was invisible in exactly the configuration
+        // that most needs it. The peek is a transient signal in its own
+        // right — hiding the persistent strip is a statement about chrome
+        // over the menu bar, not a request to be told nothing.
+        //
+        // Below the pill, in the transparent part of the window. It claims no
+        // clicks: the window's hit region is the drawn silhouette only, so the
+        // peek is pixels over whatever app is behind and nothing more.
+        .overlay(alignment: .top) { sneakPeekView }
         // The pointer reaching the place the strip would be, when the strip is
         // not drawn (decision 055). Runs through the same dwell and haptic as
         // a real hover, so the two entry paths cannot feel different — and the
@@ -370,7 +418,16 @@ struct ContentView: View {
         return ZStack(alignment: .top) {
             silhouette
                 .fill(Color.black)
-                .opacity(displayedExpanded ? 0 : 1)
+                // `stripHidden` too, not just `displayedExpanded`: black is
+                // only ever right because it merges with the notch. On a
+                // notchless display with the strip switched off there is no
+                // notch to merge with, and fading it in over the retracting
+                // glass drew a black slab across someone else's menu bar for
+                // a few hundred milliseconds (decision 065). The layer stays
+                // in the hierarchy at zero alpha for the reasons above; its
+                // report goes unread in exactly this case, because
+                // `activeRect` short-circuits to `.zero` here (NotchWindow).
+                .opacity(displayedExpanded || stripHidden ? 0 : 1)
             if displayedExpanded {
                 ZStack(alignment: .top) {
                     // Hit-testable substrate. macOS routes clicks on a
@@ -385,10 +442,19 @@ struct ContentView: View {
                     // Clear glass passes the backdrop through almost intact,
                     // so white text over a bright window is unreadable
                     // without a scrim (Apple's own guidance for `.clear`).
-                    // The other styles already carry enough of their own
-                    // density and get none.
-                    if prefs.panelStyle == .clear {
-                        Color.black.opacity(0.22)
+                    // The denser styles carry most of their own legibility and
+                    // need only the contrast top-up.
+                    //
+                    // This replaces the per-glyph drop shadows the title,
+                    // transport row, gear and progress labels each used to
+                    // carry: a shadow behind every letter is what the HIG
+                    // calls out as the wrong fix for text on a variable
+                    // backdrop — it thickens the type and still fails on a
+                    // mid-grey desktop. One scrim under the whole content
+                    // does the job the shadows were approximating, and does
+                    // it uniformly (decision 062).
+                    if contentScrim > 0 {
+                        Color.black.opacity(contentScrim)
                     }
                     // Blend the top of the panel to black so it keeps merging
                     // with the notch pill directly above it; the glass takes
@@ -418,11 +484,17 @@ struct ContentView: View {
         ZStack {
             shape.stroke(
                 LinearGradient(
-                    colors: [.white.opacity(0.55), .white.opacity(0.16), .white.opacity(0.38)],
+                    // Increase Contrast turns the rim from a glass highlight
+                    // into an actual edge: at standard contrast the panel is
+                    // meant to float, but a user who asked for hard edges
+                    // needs to see where the panel stops.
+                    colors: contrast == .increased
+                        ? [.white.opacity(0.9), .white.opacity(0.7), .white.opacity(0.85)]
+                        : [.white.opacity(0.55), .white.opacity(0.16), .white.opacity(0.38)],
                     startPoint: .top,
                     endPoint: .bottom
                 ),
-                lineWidth: 1.2
+                lineWidth: contrast == .increased ? 1.5 : 1.2
             )
             shape.stroke(Color.white.opacity(0.14), lineWidth: 3)
                 .blur(radius: 2.5)
@@ -438,6 +510,21 @@ struct ContentView: View {
         .allowsHitTesting(false)
     }
 
+    /// Opacity of the black scrim between the glass and the panel's content.
+    ///
+    /// Clear glass is nearly a window, so it carries the bulk of it; the
+    /// denser styles need none at standard contrast. Increase Contrast adds a
+    /// fixed top-up to every style, which is what takes white-on-glass over a
+    /// bright backdrop past 4.5:1. Reduce Transparency has already made the
+    /// material opaque by the time this is read, so there is nothing left to
+    /// scrim.
+    private var contentScrim: Double {
+        if reduceTransparency { return 0 }
+        var opacity: Double = prefs.panelStyle == .clear ? 0.30 : 0
+        if contrast == .increased { opacity += 0.22 }
+        return min(opacity, 0.6)
+    }
+
     /// The panel's material, per `prefs.panelStyle` (decision 030).
     ///
     /// Below macOS 26 there is no `glassEffect` at all, so the three glass
@@ -446,23 +533,52 @@ struct ContentView: View {
     /// is identical on every version.
     @ViewBuilder
     private var glassLayer: some View {
-        if prefs.panelStyle == .solid {
-            shape.fill(Color.black.opacity(0.93))
-        } else if #available(macOS 26.0, *) {
-            Color.clear.glassEffect(glass, in: shape)
+        if prefs.panelStyle == .solid || reduceTransparency {
+            // Reduce Transparency collapses every style onto the opaque one.
+            // Deliberately not a *tinted* opaque fill: the point of the
+            // setting is that nothing behind the window shows through, and an
+            // album-tinted plate still changes under the user with the track.
+            shape.fill(Color.black.opacity(reduceTransparency ? 1.0 : 0.93))
         } else {
-            shape.fill(prefs.panelStyle == .clear ? .ultraThinMaterial : .regularMaterial)
+            ZStack {
+                if #available(macOS 26.0, *) {
+                    Color.clear.glassEffect(glass, in: shape)
+                } else {
+                    shape.fill(prefs.panelStyle == .clear ? .ultraThinMaterial : .regularMaterial)
+                }
+                // The album tint's actual pixels (decision 064). `Glass.tint`
+                // alone could not carry this feature: measured through
+                // `ImageRenderer` over a neutral grey backdrop, every glass
+                // variant — `.regular`, `.clear`, and `.regular.tint()` in red
+                // and in blue — rendered to an identical 0.502/0.502/0.502.
+                // `glassEffect` contributes no pixels to the view's own render
+                // tree at all; it is a compositor parameter, and how much of a
+                // tint the compositor chooses to show over a dark panel is not
+                // ours to decide. So the colour is drawn here instead, where it
+                // is ours.
+                //
+                // Under the black top blend, which is layered after this in
+                // `backgroundShape`, so the notch seam stays black regardless.
+                if prefs.panelStyle == .tinted,
+                   let wash = PanelTint.wash(for: state.artworkTint) {
+                    shape.fill(wash)
+                }
+            }
         }
     }
 
     /// `.tint(nil)` is defined as "no tint", so a track with no artwork (or a
     /// cover we couldn't sample) falls back to plain regular glass instead of
     /// needing a separate branch.
+    ///
+    /// Passed at full alpha now, not `.opacity(0.55)`: whatever the compositor
+    /// is willing to contribute is on top of `PanelTint.wash` and was being
+    /// halved for no stated reason.
     @available(macOS 26.0, *)
     private var glass: Glass {
         switch prefs.panelStyle {
         case .clear: return .clear
-        case .tinted: return .regular.tint(state.artworkTint.map { Color(nsColor: $0).opacity(0.55) })
+        case .tinted: return .regular.tint(state.artworkTint.map { Color(nsColor: $0) })
         case .regular, .solid: return .regular
         }
     }
@@ -522,7 +638,7 @@ struct ContentView: View {
                     .frame(width: wingContentWidth, height: contentSquare)
                     .overlay {
                         if showsMedia, !displayedExpanded {
-                            artworkView(side: contentSquare, cornerRadius: 4)
+                            artworkView(side: contentSquare, cornerRadius: 5)
                                 .matchedGeometryEffect(id: Self.artworkID, in: artworkNamespace)
                         }
                     }
@@ -537,7 +653,11 @@ struct ContentView: View {
                     .frame(width: wingContentWidth, height: contentSquare)
                     .overlay {
                         if prefs.showVisualizer {
-                            VisualizerView(isPlaying: state.nowPlaying?.isPlaying ?? false)
+                            VisualizerView(
+                                isPlaying: state.nowPlaying?.isPlaying ?? false,
+                                artworkTint: state.artworkTint,
+                                prefs: prefs
+                            )
                         }
                     }
                     .padding(.leading, wingInnerInset)
@@ -555,53 +675,287 @@ struct ContentView: View {
         .frame(width: collapsedWidth, height: stripHeight, alignment: .top)
     }
 
-    private func artworkView(side: CGFloat, cornerRadius: CGFloat) -> some View {
+    /// One position in the transport row (decision 074).
+    ///
+    /// Every case here is an action Tempo can actually carry out today.
+    /// `MediaRemoteService` exposes previous / play-pause / next and nothing
+    /// else, and mute is Tempo's own via `AudioOutputService` — so the palette
+    /// stops there rather than offering a shuffle or repeat slot that would
+    /// render a button which does nothing (UI Principle #4).
+    @ViewBuilder
+    private func transportControl(_ control: MusicControl) -> some View {
+        switch control {
+        case .none:
+            EmptyView()
+        case .previous:
+            Button(action: { media.previousTrack() }) {
+                Image(systemName: "backward.fill")
+            }
+            .accessibilityLabel("Previous track")
+            .help("Previous track")
+        case .playPause:
+            Button(action: { media.playPause() }) {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+            }
+            .accessibilityLabel(isPlaying ? "Pause" : "Play")
+            .help(isPlaying ? "Pause" : "Play")
+        case .next:
+            Button(action: { media.nextTrack() }) {
+                Image(systemName: "forward.fill")
+            }
+            .accessibilityLabel("Next track")
+            .help("Next track")
+        case .mute:
+            Button(action: { audio.setMuted(!audio.isMuted) }) {
+                Image(systemName: audio.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+            }
+            .accessibilityLabel(audio.isMuted ? "Unmute" : "Mute")
+            .help(audio.isMuted ? "Unmute" : "Mute")
+        }
+    }
+
+    /// The cover, or — when there isn't one — a plate that says so.
+    ///
+    /// The placeholder was a flat grey square, which over the black pill read
+    /// as a rendering fault rather than as "no artwork for this track". A
+    /// glyph on a dim plate is the platform's own empty-state idiom and costs
+    /// nothing at 20pt. Continuous corners throughout: `.continuous` is the
+    /// curve macOS uses for every rounded rect of this size, and the circular
+    /// one visibly disagrees with the notch shape's own corners beside it.
+    ///
+    /// `ambient` adds the glow and the blurred backdrop behind the cover
+    /// (decision 070). Only the expanded header passes it: in the collapsed
+    /// pill the bloom would spill past the black silhouette and hang in the
+    /// air beside the notch, which is exactly the artefact the silhouette
+    /// exists to prevent.
+    private func artworkView(side: CGFloat, cornerRadius: CGFloat, ambient: Bool = false) -> some View {
         Group {
             if let artwork = state.artwork {
                 Image(nsImage: artwork)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(Color.gray.opacity(0.4))
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.primary.opacity(0.14))
+                    .overlay {
+                        Image(systemName: "music.note")
+                            .font(.system(size: side * 0.42, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
             }
         }
         .frame(width: side, height: side)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .background {
+            if ambient { albumAmbience(side: side, cornerRadius: cornerRadius) }
+        }
+        .accessibilityLabel(state.artwork == nil
+                            ? "No album artwork"
+                            : "Album artwork for \(state.nowPlaying?.track ?? "the current track")")
+    }
+
+    /// The light behind the album (decision 070).
+    ///
+    /// Two independent layers, matching the two switches boringNotch ships,
+    /// because they read as different looks and people want them separately:
+    /// a blurred, over-scaled copy of the cover, and a bloom in the cover's
+    /// dominant colour. Both are drawn *behind* the clipped artwork and neither
+    /// takes clicks.
+    ///
+    /// Painted, not composited. Decision 064 measured that `glassEffect`'s
+    /// tint parameter contributes no pixels to this view's render tree, so a
+    /// glow expressed as a material hint would have been invisible the same
+    /// way the album tint was for six weeks. These are real fills and real
+    /// blurs.
+    ///
+    /// Suppressed entirely under Reduce Transparency: a bloom is decoration
+    /// spilling past the thing it decorates, which is precisely what that
+    /// setting asks apps to stop doing.
+    @ViewBuilder
+    private func albumAmbience(side: CGFloat, cornerRadius: CGFloat) -> some View {
+        if !reduceTransparency {
+            let strength = prefs.albumGlowStrength
+            ZStack {
+                // Bloom sits under the blurred cover so the cover's own colours
+                // stay the top-most thing behind the art.
+                if prefs.albumGlow, let tint = state.artworkTint {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(Color(nsColor: tint))
+                        .frame(width: side, height: side)
+                        .blur(radius: side * (0.10 + 0.24 * strength))
+                        .scaleEffect(1 + 0.12 * strength)
+                        .opacity(0.22 + 0.46 * strength)
+                }
+                if prefs.albumArtBlur, let artwork = state.artwork {
+                    Image(nsImage: artwork)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: side, height: side)
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                        .blur(radius: side * 0.16)
+                        .scaleEffect(1.16)
+                        .opacity(0.55)
+                }
+            }
+            .allowsHitTesting(false)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: state.artworkTint)
+        }
+    }
+
+    /// What just started playing, under the notch, without opening anything
+    /// (decision 072).
+    ///
+    /// The panel already answers "what's playing" — but only once you have
+    /// moved the pointer to the notch and waited out the hover delay. A track
+    /// change is the one moment the answer is wanted without being asked for,
+    /// which is exactly what boringNotch's Sneak Peek is for. Suppressed while
+    /// the panel is open, where it would be repeating what is already on
+    /// screen an inch above it.
+    @ViewBuilder
+    private var sneakPeekView: some View {
+        if let peek = sneakPeekTrack, !displayedExpanded {
+            VStack(spacing: NotchMetrics.tightSpacing) {
+                Text(peek.track)
+                    .font(NotchType.title)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                if !peek.artist.isEmpty {
+                    Text(peek.artist)
+                        .font(NotchType.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: panelWidth - 40)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.black.opacity(0.82))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                    }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, NotchGeometry.stripHeight + 6)
+            .allowsHitTesting(false)
+            .transition(
+                reduceMotion
+                    ? .opacity
+                    : .move(edge: .top).combined(with: .opacity)
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Now playing: \(peek.track) by \(peek.artist)")
+        }
+    }
+
+    /// Raises the peek for a new track and schedules its retraction.
+    ///
+    /// Only a real change to a *named* track counts. Startup, a stop, and the
+    /// artwork arriving a beat after the title all pass through here, and none
+    /// of them is a track change the user needs told about.
+    private func showSneakPeek(for track: String?) {
+        sneakPeekTask?.cancel()
+        sneakPeekTask = nil
+
+        guard prefs.sneakPeek,
+              let track, !track.isEmpty,
+              let playing = state.nowPlaying,
+              !displayedExpanded
+        else {
+            if sneakPeekTrack != nil {
+                withAnimation(.easeOut(duration: 0.2)) { sneakPeekTrack = nil }
+            }
+            return
+        }
+
+        withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.34, dampingFraction: 0.82)) {
+            sneakPeekTrack = playing
+        }
+
+        let seconds = prefs.sneakPeekSeconds
+        sneakPeekTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(Int(seconds * 1000)))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.25)) { sneakPeekTrack = nil }
+            sneakPeekTask = nil
+        }
     }
 
     // MARK: Expanded content
 
+    /// Two groups, not six equal siblings (decision 063).
+    ///
+    /// Everything here used to sit in one stack at a uniform 12pt, which put
+    /// the artist's name exactly as far from the track title as the CPU graph
+    /// was from the agent list — so the panel read as a column of unrelated
+    /// widgets rather than "what's playing" followed by "what the Mac is
+    /// doing". Proximity is the cheapest hierarchy there is (HIG ▸ Layout:
+    /// alignment and grouping are what show which things are related), so the
+    /// media controls now sit tight together, the system readouts sit tight
+    /// together, and the two blocks are separated by a wider gap and a
+    /// hairline.
     private var expandedContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             if showsMedia {
-                nowPlayingHeader
-                // Full content width, below the cover+controls block rather
-                // than inside the column beside the cover: the extra ~120pt
-                // is what makes the bar precise enough to scrub with
-                // (~1.7pt per second on a typical track instead of ~1.1).
-                if let progress = state.progress, progress.duration > 0 {
-                    PlaybackProgressView(progress: progress) { media.seek(to: $0) }
+                VStack(alignment: .leading, spacing: NotchMetrics.rowSpacing) {
+                    nowPlayingHeader
+                    // Full content width, below the cover+controls block rather
+                    // than inside the column beside the cover: the extra ~120pt
+                    // is what makes the bar precise enough to scrub with
+                    // (~1.7pt per second on a typical track instead of ~1.1).
+                    if let progress = state.progress, progress.duration > 0 {
+                        PlaybackProgressView(progress: progress) { media.seek(to: $0) }
+                    }
+                    // Out of the column beside the cover and across the full
+                    // content width. In the column it was the tallest thing
+                    // there, and since the cover matches the column's height
+                    // it was what inflated the cover to ~104pt — a header
+                    // half again as tall as it needed to be. Out here the
+                    // column is title + artist + transport, the cover settles
+                    // to its 72pt floor, and the picker gets 353pt of width
+                    // instead of ~230 to show a playlist name in.
+                    if api.isConfigured {
+                        PlaylistSection(api: api, state: state, prefs: prefs)
+                    }
                 }
             }
-            if prefs.showAudioOutput {
-                AudioOutputView(audio: audio)
+
+            if showsMedia && hasSystemContent {
+                groupSeparator
             }
-            if prefs.showFileShelf {
-                ShelfView(shelf: shelf, isDropTargeting: state.isDragTargeting)
-            }
-            if prefs.showUsageGraph {
-                UsageGraphView()
-            }
-            if prefs.showAgentLights {
-                AgentLightsView(
-                    sessions: state.sessions,
-                    // Empty when the figures are switched off — the service is
-                    // stopped in that case anyway, and an empty map is exactly
-                    // "this row has no figures" (decision 048).
-                    stats: prefs.showAgentStats ? state.sessionStats : [:],
-                    onFocus: focusSession
-                )
+
+            if hasSystemContent {
+                VStack(alignment: .leading, spacing: NotchMetrics.sectionSpacing) {
+                    if prefs.showAudioOutput {
+                        AudioOutputView(audio: audio)
+                    }
+                    if prefs.showFileShelf {
+                        ShelfView(shelf: shelf, isDropTargeting: state.isDragTargeting)
+                    }
+                    if prefs.showUsageGraph {
+                        UsageGraphView()
+                    }
+                    if prefs.showRateLimitPace {
+                        RateLimitPaceView(service: usage, prefs: prefs)
+                    }
+                    if prefs.showUsageHistory {
+                        UsageHistoryView(service: usage)
+                    }
+                    if prefs.showAgentLights {
+                        AgentLightsView(
+                            sessions: state.sessions,
+                            // Empty when the figures are switched off — the
+                            // service is stopped in that case anyway, and an
+                            // empty map is exactly "this row has no figures"
+                            // (decision 048).
+                            stats: prefs.showAgentStats ? state.sessionStats : [:],
+                            onFocus: focusSession
+                        )
+                    }
+                }
             }
         }
         // Top-right corner of the panel content. An overlay rather than a
@@ -616,7 +970,7 @@ struct ContentView: View {
         }
         // Horizontal inset clears the shape's straight sides, which sit
         // `expandedTopRadius` inside the panel rect.
-        .padding(.horizontal, NotchShape.expandedTopRadius + 7)
+        .padding(.horizontal, NotchMetrics.contentInset)
         .padding(.vertical, 16)
         .frame(width: panelWidth, alignment: .topLeading)
         // Content-sized panel: measure the natural height and report it. A
@@ -632,6 +986,34 @@ struct ContentView: View {
                     }
             }
         )
+    }
+
+    /// The rule between the media block and the system block. One hairline,
+    /// not a header on each section: four new labels would cost ~56pt of a
+    /// panel that is already close to its ceiling, and would out-shout the
+    /// content they name (UI Principle #1). It brightens under Increase
+    /// Contrast like every other edge in the panel.
+    private var groupSeparator: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(contrast == .increased ? 0.30 : 0.12))
+            .frame(height: 1)
+            .padding(.vertical, NotchMetrics.groupSpacing)
+            .accessibilityHidden(true)
+    }
+
+    /// Whether the system group will actually draw anything.
+    ///
+    /// Asked before the separator is drawn, because three of the four sections
+    /// hide themselves when they have nothing to show — an empty shelf, no
+    /// live sessions — and a rule with nothing under it is worse than no rule
+    /// at all. The output row and the usage graphs always draw when switched
+    /// on; the shelf and the agent list do not.
+    private var hasSystemContent: Bool {
+        if prefs.showAudioOutput || prefs.showUsageGraph { return true }
+        if prefs.showRateLimitPace || prefs.showUsageHistory { return true }
+        if prefs.showFileShelf, state.isDragTargeting || !shelf.items.isEmpty { return true }
+        if prefs.showAgentLights, !state.sessions.isEmpty { return true }
+        return false
     }
 
     /// The onboarding sequence, measured and reported exactly like
@@ -663,21 +1045,26 @@ struct ContentView: View {
     /// occupy the full content width. The artwork is the same square that was
     /// in the collapsed pill's left wing, travelling here via
     /// `matchedGeometryEffect`.
+    ///
+    /// The playlist row used to live in this column and is now below the
+    /// whole block (decision 063), which is what lets the cover sit at its
+    /// 72pt floor instead of being stretched to ~104 to match a column the
+    /// picker had made tall.
     private var nowPlayingHeader: some View {
         HStack(alignment: .center, spacing: 14) {
-            artworkView(side: expandedArtSize, cornerRadius: 12)
+            artworkView(side: expandedArtSize, cornerRadius: 12, ambient: true)
                 .matchedGeometryEffect(id: Self.artworkID, in: artworkNamespace)
                 .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
 
             VStack(spacing: 6) {
                 VStack(spacing: 2) {
                     Text(state.nowPlaying?.track ?? "Nothing playing")
-                        .font(.headline)
-                        .foregroundColor(.primary)
+                        .font(NotchType.title)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                     Text(state.nowPlaying?.artist ?? "")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .font(NotchType.subtitle)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 .multilineTextAlignment(.center)
@@ -685,32 +1072,34 @@ struct ContentView: View {
                 // Symmetric, so the title stays centred on the play button
                 // while still keeping clear of the gear in the corner.
                 .padding(.horizontal, 24)
-                .shadow(color: .black.opacity(0.5), radius: 3)
+                // Title and artist are one thing to VoiceOver, and the full
+                // untruncated text is what it should read — the visible line
+                // is clipped to the panel's width.
+                .accessibilityElement(children: .combine)
+                .help(nowPlayingHelp)
 
                 // Evenly spread: with equal spacers the middle button lands on
                 // the column's centre line, directly below the title.
+                // Empty slots are dropped rather than rendered as zero-width
+                // boxes: with equal spacers, an extra participant on each side
+                // would redistribute the spacing and shift the three default
+                // buttons inward. Filtering keeps the default row byte-identical
+                // to the hard-coded one it replaced (Agent Guideline #7).
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    Button(action: { media.previousTrack() }) {
-                        Image(systemName: "backward.fill")
+                    ForEach(Array(prefs.musicControlSlots.filter { $0 != .none }.enumerated()),
+                            id: \.offset) { _, control in
+                        transportControl(control)
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
-                    Button(action: { media.playPause() }) {
-                        Image(systemName: (state.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
-                    }
-                    Spacer(minLength: 0)
-                    Button(action: { media.nextTrack() }) {
-                        Image(systemName: "forward.fill")
-                    }
-                    Spacer(minLength: 0)
                 }
                 .buttonStyle(NotchButtonStyle())
-                .foregroundColor(.primary)
-                .font(.system(size: 17, weight: .medium))
-                .shadow(color: .black.opacity(0.5), radius: 3)
+                .foregroundStyle(.primary)
+                // `.title2` is 17pt on macOS — the size these glyphs already
+                // were, now tracking the user's text-size setting.
+                .font(.title2.weight(.medium))
                 .frame(maxWidth: .infinity)
 
-                PlaylistSection(api: api, state: state, prefs: prefs)
             }
             // The column sets the header's height; the cover matches it.
             .background(
@@ -723,6 +1112,17 @@ struct ContentView: View {
                 }
             )
         }
+    }
+
+    private var isPlaying: Bool { state.nowPlaying?.isPlaying ?? false }
+
+    /// The full track and artist, for the tooltip and for VoiceOver. The
+    /// visible line is `lineLimit(1)` inside a 405pt panel, so a long title is
+    /// truncated on screen and this is the only place it survives intact
+    /// (HIG ▸ Clarity: don't let the layout be the only copy of the content).
+    private var nowPlayingHelp: String {
+        guard let playing = state.nowPlaying else { return "Nothing playing" }
+        return playing.artist.isEmpty ? playing.track : "\(playing.track) — \(playing.artist)"
     }
 
     /// A click on an agent light goes to that session's window (decision 035)
@@ -760,11 +1160,11 @@ struct ContentView: View {
             openSettings()
         }) {
             Image(systemName: "gearshape.fill")
-                .font(.system(size: 13, weight: .medium))
+                .font(.body.weight(.medium))
         }
         .buttonStyle(NotchButtonStyle())
-        .foregroundColor(.secondary)
-        .shadow(color: .black.opacity(0.5), radius: 3)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel("Tempo Settings")
         .help("Tempo Settings")
     }
 
@@ -772,6 +1172,16 @@ struct ContentView: View {
     /// height and to the hit region's expanded target rect (NotchWindow.swift).
     private func reportExpandedHeight(_ contentHeight: CGFloat) {
         guard contentHeight > 0, contentHeight != expandedContentHeight else { return }
+        // The ceiling is a hard clip, not a scroll: content laid out past
+        // `panelHeight` is outside the window and simply never drawn, so
+        // overflowing it loses the bottom section with no other symptom
+        // (decision 063). Nothing can be done about it at runtime — the
+        // window is not resized — but a run with TEMPO_DEBUG_VIZ=1 will at
+        // least say so instead of leaving it to be noticed by eye.
+        let total = contentHeight + stripHeight
+        tempoDebug("panel content \(Int(contentHeight))pt + strip \(Int(stripHeight))pt"
+                   + " = \(Int(total))pt of \(Int(panelHeight))pt ceiling"
+                   + (total > panelHeight ? "  ** CLIPPED **" : ""))
         expandedContentHeight = contentHeight
         NotchHitRegion.shared.expandedTarget = CGSize(
             width: panelWidth,

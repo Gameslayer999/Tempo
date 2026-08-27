@@ -15,7 +15,17 @@ final class AppState: ObservableObject {
     /// AppleScript round-trip (decision 049). Owned by `MusicService`.
     @Published var spotifyTrackURI: String? = nil
     @Published var artwork: NSImage? = nil {
-        didSet { artworkTint = artwork?.dominantColor() }
+        didSet {
+            artworkTint = artwork?.dominantColor()
+            // A nil tint makes the `.tinted` panel style indistinguishable
+            // from plain glass, which is indistinguishable from the style
+            // being broken. Say which it is under TEMPO_DEBUG_VIZ=1.
+            tempoDebug(artworkTint.map {
+                let c = $0.usingColorSpace(.sRGB) ?? $0
+                return String(format: "artwork tint h=%.2f s=%.2f b=%.2f",
+                              c.hueComponent, c.saturationComponent, c.brightnessComponent)
+            } ?? "artwork tint: none (cover is \(artwork == nil ? "missing" : "unsamplable")) — .tinted will look like plain glass")
+        }
     }
     /// Dominant colour of the current cover, recomputed only when the cover
     /// itself changes. Drives the `.tinted` panel style (decision 030); nil

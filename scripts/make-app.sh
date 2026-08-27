@@ -190,6 +190,14 @@ if [ -n "$RUNNING_PIDS" ]; then
   echo "==> Quitting the running ${APP_NAME} (PID $(echo "$RUNNING_PIDS" | tr '\n' ' ' | sed 's/ $//')) so the next launch uses this build…"
   # SIGTERM only: the app has no unsaved state, and a stuck process is the
   # user's to deal with rather than something this script should SIGKILL.
+  #
+  # This is a real quit, not a kill: Tempo routes SIGTERM through
+  # `NSApplication.terminate` (decision 067), so `applicationWillTerminate`
+  # runs and reaps its `/usr/bin/perl` mediaremote-adapter child. It did not
+  # always — the kernel's default disposition killed the process outright, and
+  # every rebuild orphaned an adapter to PPID 1. Deliberately *not* switched to
+  # `osascript … to quit`, which would have worked equally well and cost this
+  # script an Automation (Apple Events) TCC prompt it has never needed.
   echo "$RUNNING_PIDS" | xargs kill 2>/dev/null || true
 
   # Wait for the old process to actually go before relaunching, so `open`

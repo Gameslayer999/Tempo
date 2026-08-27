@@ -32,11 +32,15 @@ final class OnboardingController: ObservableObject {
     /// the phase, so the writing speed is independent of how long the word is
     /// held afterwards.
     @Published var strokeProgress: CGFloat = 0
+    /// The word's own opacity, so it can leave before the cards arrive rather
+    /// than cross-fading through them (decision 060).
+    @Published var helloOpacity: CGFloat = 1
 
-    /// How long the word takes to write itself, and how long it is held
-    /// complete before the cards replace it.
-    static let strokeDuration: TimeInterval = 2.4
-    static let holdDuration: TimeInterval = 0.7
+    /// How long the word takes to write itself, how long it is held complete,
+    /// and how long it takes to leave.
+    static let strokeDuration: TimeInterval = 2.6
+    static let holdDuration: TimeInterval = 0.8
+    static let fadeDuration: TimeInterval = 0.4
 
     private let state: AppState
     private let prefs: Preferences
@@ -66,6 +70,7 @@ final class OnboardingController: ObservableObject {
         guard phase == .inactive else { return }
         advanceTask?.cancel()
         strokeProgress = 0
+        helloOpacity = 1
         phase = .hello
         state.isOnboarding = true
 
@@ -78,7 +83,15 @@ final class OnboardingController: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.beginStroke()
 
+            // Written, then held, then gone — and only once it is gone do the
+            // cards arrive. Swapping the two directly is what made the first
+            // run read as a cut: the word vanished on the same frame the panel
+            // jumped from 96pt of writing to a full column of setup rows.
             try? await Task.sleep(for: .seconds(Self.strokeDuration + Self.holdDuration))
+            guard !Task.isCancelled else { return }
+            self?.beginFadeOut()
+
+            try? await Task.sleep(for: .seconds(Self.fadeDuration))
             guard !Task.isCancelled else { return }
             self?.advanceToSetup()
         }
@@ -88,6 +101,11 @@ final class OnboardingController: ObservableObject {
         guard phase == .hello else { return }
         // The view applies the animation; this is only the target value.
         strokeProgress = 1
+    }
+
+    private func beginFadeOut() {
+        guard phase == .hello else { return }
+        helloOpacity = 0
     }
 
     private func advanceToSetup() {
@@ -102,6 +120,7 @@ final class OnboardingController: ObservableObject {
         advanceTask?.cancel()
         advanceTask = nil
         strokeProgress = 1
+        helloOpacity = 1
         phase = .setup
     }
 

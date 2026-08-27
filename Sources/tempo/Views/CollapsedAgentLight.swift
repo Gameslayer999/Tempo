@@ -56,45 +56,33 @@ struct CollapsedAgentLight: View {
 /// session is a solid white light with a steady halo: it is a state to notice,
 /// not one to act on, and a second moving signal beside the visualizer made
 /// the pill read as busy rather than glanceable (decision 045).
+///
+/// Colour, shape and motion all come from `AgentAppearance`, so this dot and
+/// the expanded panel's rows cannot drift apart — and so idle reads as a
+/// hollow ring rather than a dim green-ish disc, which is what makes the
+/// states distinguishable without colour (decision 062).
 private struct SummaryDot: View {
     var summary: AgentSummary
 
     @State private var pulse = false
 
-    private var color: Color {
-        switch summary {
-        case .error: return .red
-        case .blocked: return .orange
-        case .finished: return .white
-        case .running: return .green
-        case .idle, .none: return .gray
-        }
-    }
-
-    private var pulses: Bool { summary == .blocked }
-    /// The halo the attention states carry whether or not they move.
-    private var glows: Bool { summary == .blocked || summary == .finished }
+    private var appearance: AgentAppearance { AgentAppearance(summary) }
 
     var body: some View {
-        Circle()
-            .fill(color)
-            // Idle is present but recessive: it is the state nobody acts on,
-            // and at full strength a row of grey dots competes with the
-            // visualizer beside it.
-            .opacity(summary == .idle ? 0.4 : (pulses && pulse ? 0.45 : 1))
-            .scaleEffect(pulses && pulse ? 1.2 : 1)
-            .frame(width: CollapsedAgentLight.dotSize, height: CollapsedAgentLight.dotSize)
-            .shadow(color: color.opacity(glows ? 0.7 : 0), radius: 3)
+        AgentDot(appearance: appearance,
+                 size: CollapsedAgentLight.dotSize,
+                 pulsePhase: pulse)
             .onAppear { syncPulse() }
             // Unlike the expanded panel's rows — which are created fresh each
             // time the panel opens — this dot is long-lived and changes state
             // under the pointer, so the animation has to be re-armed on every
             // transition, not just on appear.
             .onChange(of: summary) { _, _ in syncPulse() }
+            .accessibilityLabel("Agent \(appearance.label)")
     }
 
     private func syncPulse() {
-        if pulses {
+        if appearance.pulses {
             withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
                 pulse = true
             }

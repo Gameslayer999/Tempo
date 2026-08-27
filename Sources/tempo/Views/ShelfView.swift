@@ -44,7 +44,7 @@ struct ShelfView: View {
                     Image(systemName: "tray.and.arrow.down.fill")
                     Text(shelf.items.isEmpty ? "Drop to keep here" : "Add to shelf")
                 }
-                .font(.system(size: 12, weight: .medium))
+                .font(NotchType.control.weight(.medium))
                 .foregroundStyle(.secondary)
             }
             // The well is the affordance; the actual drop is accepted by the
@@ -70,10 +70,13 @@ struct ShelfView: View {
     private func itemChip(_ item: ShelfItem) -> some View {
         VStack(spacing: 3) {
             Image(systemName: item.symbolName)
-                .font(.system(size: 18, weight: .regular))
+                .font(.title3)
                 .foregroundStyle(.primary)
             Text(item.name)
-                .font(.system(size: 9))
+                // Was 9pt — below every macOS text style and under Apple's own
+                // legibility floor. `.caption2` is the smallest the platform
+                // ships (10pt) and it scales with the user's setting.
+                .font(NotchType.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -83,6 +86,9 @@ struct ShelfView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.primary.opacity(hoveredID == item.id ? 0.16 : 0.08))
         )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(item.name)
+        .accessibilityHint("Drag out to copy, or use the shortcut menu to reveal or remove")
         // Dragging the chip hands the *stored copy* to the receiving app, so
         // the shelf keeps working after the original is moved or deleted.
         .onDrag { shelf.itemProvider(for: item) }
@@ -93,11 +99,19 @@ struct ShelfView: View {
                     shelf.remove(item)
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12))
+                        .font(NotchType.control)
                         .foregroundStyle(.secondary)
+                        // The glyph is 12pt; the target it sits in is not.
+                        // A 12pt close button on a 52pt chip is a dart throw,
+                        // and missing it drags the file out instead.
+                        .frame(width: NotchMetrics.compactHitTarget,
+                               height: NotchMetrics.compactHitTarget)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .offset(x: 4, y: -4)
+                .accessibilityLabel("Remove \(item.name) from the shelf")
+                .help("Remove from shelf")
+                .offset(x: 8, y: -8)
             }
         }
         .contextMenu {

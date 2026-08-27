@@ -69,7 +69,11 @@ struct PanelStylePreview: View {
             shape.fill(Color.black.opacity(0.05))
             glassLayer
             if style == .clear {
-                Color.black.opacity(0.22)
+                // Tracks `ContentView.contentScrim` at standard contrast.
+                // This preview is deliberately not contrast-aware: it shows
+                // what the style does, not what the user's accessibility
+                // settings will additionally do to it.
+                Color.black.opacity(0.30)
             }
             LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
                 .frame(height: stripHeight + 9)
@@ -84,10 +88,21 @@ struct PanelStylePreview: View {
     private var glassLayer: some View {
         if style == .solid {
             shape.fill(Color.black.opacity(0.93))
-        } else if #available(macOS 26.0, *) {
-            Color.clear.glassEffect(glass, in: shape)
         } else {
-            shape.fill(style == .clear ? .ultraThinMaterial : .regularMaterial)
+            ZStack {
+                if #available(macOS 26.0, *) {
+                    Color.clear.glassEffect(glass, in: shape)
+                } else {
+                    shape.fill(style == .clear ? .ultraThinMaterial : .regularMaterial)
+                }
+                // The same painted wash the panel carries (decision 064) —
+                // without it this card showed "Album tint" as plain glass,
+                // which is what the panel itself was doing and is exactly the
+                // bug being fixed.
+                if style == .tinted, let wash = PanelTint.wash(for: tint) {
+                    shape.fill(wash)
+                }
+            }
         }
     }
 
@@ -95,7 +110,7 @@ struct PanelStylePreview: View {
     private var glass: Glass {
         switch style {
         case .clear: return .clear
-        case .tinted: return .regular.tint(tint.map { Color(nsColor: $0).opacity(0.55) })
+        case .tinted: return .regular.tint(tint.map { Color(nsColor: $0) })
         case .regular, .solid: return .regular
         }
     }

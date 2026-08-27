@@ -7,6 +7,144 @@
 
 ## Current state
 
+- **Twelve features from a boringNotch / Notchy teardown (2026-08-27),
+  decisions 069–080.** Both competitors were read off their installed bundles
+  — Info.plists, preference domains, and string catalogues (boringNotch ~250
+  strings, Notchy 2,213) — and the useful half was built. From boringNotch:
+  album glow and blur behind the cover, sneak peek on track change,
+  a three-way full-screen behaviour, the media idle timeout as a setting,
+  an accent colour, a five-slot transport editor, a pinned-display picker, and
+  a coloured spectrogram. From Notchy: token history, an **estimated**
+  five-hour pace bar, and capture exclusion. Settings went from five panes to
+  eight to house it. **None of it has been seen on screen yet** — see **Now**.
+
+- **Two of the asks could not be built as asked, and both are logged.**
+  *Show the pill while locked or in screen saver* (decision 078) is rejected,
+  confirming 036: `sysadminctl -screenLock status` reports the lock delay on
+  this machine is immediate, so the screen saver here *is* the lock screen and
+  inherits the secure context 036 measured windows out of at every level. The
+  preference was written and then removed rather than shipped as a control
+  that cannot work. *Add-to-playlist as a transport slot* (decision 074) is
+  excluded because it needs a target playlist owned by `PlaylistSection`; a
+  slot with none chosen would be a lying control.
+
+- **The rate-limit pace bar is an estimate, and says so.** Verified: Claude
+  Code persists **no** real rate-limit signal locally — no `rate_limit`,
+  `resetsAt`, `retryAfter` or `unified_rate_limit` anywhere in transcripts or
+  telemetry — and `~/.claude/stats-cache.json` is unusable (measured 10 days
+  stale, every `costUSD` zero). It is computed from transcript tokens in a
+  rolling window, counting input + cache-creation + output and **excluding
+  cache reads**, which matters: cache reads were 175M of 180M on one real day
+  and counting them would make every figure meaningless.
+
+- **SIGKILL's orphan is reaped for real (2026-08-27), decision 068.** SIGKILL
+  cannot be caught — kernel guarantee, not an API gap — so the adapter it
+  strands has always been caught on the *next* Tempo launch instead, by
+  `MediaRemoteService.reapOrphanedStreams()`, which has existed since
+  2026-08-22. It was missing most of them: it compared the adapter path with
+  an exact `contains`, and `Bundle.main.resourcePath` keeps the spelling the
+  bundle was *reached* through — canonical case via `open`, the shell's case
+  when exec'd directly. On this case-insensitive filesystem that meant every
+  orphan left by a dev-route Tempo was invisible to every `open`-launched one.
+  Now compared case-insensitively, with a negative control proving it. The
+  duplicate backstop added to `make-app.sh` in 067 is removed — one rule, in
+  the app, running on every launch rather than only on a build.
+
+- **A signal is a quit now (2026-08-27), decision 067.** AppKit turns neither
+  SIGTERM nor SIGINT into `NSApplication.terminate`, so the default disposition
+  killed Tempo outright and `applicationWillTerminate` never ran — every
+  `scripts/make-app.sh` rebuild orphaned a `/usr/bin/perl` mediaremote-adapter
+  to PPID 1, and ⌃C on a foreground `swift run` did the same. Both now route
+  through a `DispatchSourceSignal` in `AppDelegate.installSignalHandlers()`.
+  **The source must be on a global queue** — on `.main` it never fires in this
+  app and Tempo just becomes immune to SIGTERM, which is worse; that is
+  measured and commented at the call site. The script keeps its bare `kill`
+  (no Automation TCC prompt).
+
+- **Tempo can be quit (2026-08-27), decision 066.** Settings ▸ About now has a
+  **Quit Tempo** button. It had none: `LSUIElement` means no Dock icon and no
+  menu-bar item, and the main menu's ⌘Q is only live while the Settings window
+  is key — so the honest answer was Activity Monitor. Uses
+  `NSApplication.shared.terminate(nil)` so `applicationWillTerminate` runs and
+  the lock-screen cards are withdrawn; verified by clicking it (0 tempo, 0
+  adapter afterward).
+
+- **Close animation fixed on notchless displays (2026-08-27), decision 065.**
+  Reported as *"the weird black fade out … doesn't really feel that good."*
+  Recorded and read frame by frame, it was two defects, both scoped to a
+  notchless display with **Show the strip on external displays** off. The
+  always-present black silhouette faded `0 → 1` on collapse — right on a
+  notched Mac, where it becomes the pill hugging the notch, but here it drew an
+  opaque black slab at near-full panel width over someone else's menu bar for
+  ~0.2s. And `panelOpacity` sat inside the collapse spring's scope, so the
+  whole-panel alpha inherited a critically damped curve whose tail left a dim
+  ghost for ~0.5s after the retract had finished. The silhouette is now not
+  drawn where there is no notch to merge with, and the alpha moved outside
+  every `expandAnimation` onto its own `.easeOut(0.18)`. Verified on screen,
+  before and after: no black in any frame, close down from ~0.6s to ~0.15s,
+  notched-Mac behaviour unchanged by construction.
+
+- **Screen Recording is granted (2026-08-27).** For the first time — decisions
+  062, 063 and 064 each had to be verified through `ImageRenderer` or the
+  accessibility tree because `screencapture` had no grant. The three **Now**
+  items below were all blocked on exactly that and are now checkable on screen.
+  `scripts/capture-panel-animation.sh` records the panel opening and closing
+  and slices it into numbered frames.
+
+- **Album tint fixed (2026-08-26), decision 064.** It had never worked. The
+  tint *was* being computed correctly — the running app reports
+  `artwork tint h=0.54 s=0.87 b=0.75` for the current cover — but it was
+  handed to `Glass.tint`, and `glassEffect` contributes no pixels to the view's
+  render tree at all (measured: `.regular`, `.clear` and `.tint()` in red and
+  blue all render to an identical 0.502 grey). It is a compositor parameter,
+  and the compositor showed nothing over a small dark panel. The colour is now
+  painted as a hue-preserving, brightness-capped wash over the glass, shared
+  with the Settings preview — which had been faithfully reproducing the bug.
+  Two further defects fixed on the way: the tint alpha was being halved for no
+  recorded reason, and below macOS 26 "Album tint" was byte-identical to
+  "Regular glass". **Not yet seen on screen** — see **Now**.
+
+- **Panel regrouped (2026-08-26), decision 063.** The expanded panel is now two
+  groups — media (header, scrubber, playlist) and system (output, shelf, usage,
+  agents) — separated by a wider gap and a hairline, instead of six sections at
+  a uniform 12pt. The playlist row moved out of the header column to full
+  width, which let the album cover drop from ~104pt to its 72pt floor. Panel
+  ceiling raised 600 → 680, and `TEMPO_DEBUG_VIZ=1` now logs the measured
+  height against it. Verified live through the accessibility tree: 28pt mute
+  button, 24pt output chips, 353x28 agent rows reading out
+  "ApplicationBot, running", no overlaps, 248pt of a 680pt ceiling.
+  **The media half was not on screen when checked** (both players paused) —
+  see **Now**.
+
+- **HIG pass across every surface landed (2026-08-26), decision 062.** The
+  panel, the collapsed pill, the onboarding cards and Settings now share one
+  typography / metrics / state-appearance vocabulary (`Views/NotchStyle.swift`).
+  Six HIG violations were fixed: **Reduce Transparency** and **Increase
+  Contrast** were both entirely unread and now drive the panel's material,
+  scrim, rim light and control affordances; **agent state was carried by hue
+  alone** and now differs in fill, diameter and glyph (measured on a greyscale
+  render — the running-vs-blocked pair went from 37/2500 to 827); five
+  **sub-28pt hit targets** were raised; **31 hard-coded `.system(size:)`
+  literals** (including a 9pt shelf label, below anything macOS ships) became
+  named text styles that track the user's text-size setting; four per-glyph
+  **text shadows** became one scrim; and the **visualizer** got the Reduce
+  Motion path it was the last animation in Tempo to lack. Debug and release
+  builds are clean with no warnings; `dist/Tempo.app` runs at 0.0% CPU at rest.
+  **The shadow-to-scrim swap has not been seen by a human** — see **Now**.
+
+- **First-run bug fixes landed (2026-08-25), decision 060.** The lock-screen
+  cards could never post: Tempo's notification authorization is `denied` on this
+  machine and `requestAuthorization` fails immediately with `UNErrorDomain#1`,
+  which the code swallowed with `try?`. Permission is now requested when the
+  feature is switched on, a refusal is recorded and surfaced, the grant is
+  re-read on every activation, and the cards post at `.active` instead of
+  `.passive` (which files a notification without presenting it). The cursive
+  `hello` now uses **Apple's own lettering** (decision 061 — the hand-drawn
+  curves were 1.5:1 where Apple's word is 3.36:1) and fades out before the setup
+  cards arrive instead of being cut to them. **The cards still cannot
+  appear until notifications are re-allowed by hand in System Settings** — see
+  **Now**.
+
 - **First-run hello and lock-screen cards landed (2026-08-24), decisions
   057–059.** Tempo now has a first run: a cursive `hello` writes itself out of
   the notch and resolves into setup rows for the permissions it needs. Weather
@@ -114,31 +252,133 @@
 
 ## Now
 
-- [ ] **Watch the hello actually write itself (decision 057)** — it plays on
-      launch while `hasSeenHello` is unset, and Settings ▸ About ▸ *Show the
-      welcome again* replays it. Check: the word draws left to right as one
-      continuous stroke over ~2.4s (not five letters at once — that is what a
-      multi-subpath path would look like, and would mean `trimmedPath` is
-      walking more than one subpath); the panel springs open before the pen
-      touches down; clicking the word skips to the cards; and the cards fit
-      **inside** the panel now. The bleed was `.padding` applied after
-      `.frame(width:)`, which adds outside the frame — fixed, but never seen
-      corrected. Also confirm the letterforms read as Apple's hello and not as
-      generic script; the curve was tuned against renders, not against the real
-      thing side by side.
+- **The lock-screen cards need a playing track and a weather reading, and
+  neither was present.** Not a defect (decision 081). `postMusicIfLocked`
+  requires a *playing* track by design and Spotify has been paused;
+  `postWeatherIfLocked` posts nothing without a reading, and no city is set
+  (`weatherCity` unwritten, no cached place) so it depends on CoreLocation. To
+  confirm both work: start playback, set a city in Settings ▸ Weather (or
+  grant location), then lock. If a card still does not appear, run
+  `TEMPO_DEBUG_VIZ=1 dist/Tempo.app/Contents/MacOS/tempo` and lock — there is
+  now a log line per card naming which guard rejected it, and the `add()`
+  completion error is no longer discarded.
 
-- [ ] **Walk the setup rows and grant things (decisions 057–059)** — this is
-      the only way the two permission paths get exercised at all. Click
-      **Allow** on *Lock screen cards*: macOS should show the notification
-      prompt, the row should turn to a green check, and the lock-screen cards
-      should switch themselves on. The *Weather location* row should then
-      appear and macOS should ask for **approximate** location (not precise —
-      if it asks for precise, `kCLLocationAccuracyReduced` is not taking
-      effect). **Unverified and load-bearing:** whether an *ad-hoc-signed*
-      bundle can get notification authorization at all on this machine. It
-      should — `UNUserNotificationCenter` keys off the bundle id, not a Team ID
-      — but nothing has confirmed it, and decision 036 is the standing warning
-      about mistaking bookkeeping for pixels.
+- **`Show previews` is `.whenAuthenticated`, not `Always`.** Measured from the
+  API: `status=2` authorized, `lockScreenSetting=2` enabled, `alertSetting=2`
+  enabled, `showPreviewsSetting=1`. Tempo has **no per-app record in
+  `ncprefs`** (searched all 110 entries, zero matches anywhere in the plist),
+  so it is inheriting the system default and does not appear in System
+  Settings ▸ Notifications ▸ Tempo for the user to change. Whether a card
+  delivered under that setting renders with content on the lock screen is the
+  open question — the README already warns it renders as a contentless
+  "Tempo · Notification", and that claim is now worth re-checking against a
+  real lock rather than trusted.
+
+- **Look at all twelve features on screen.** Everything below decisions
+  069–080 builds clean with zero warnings, and **not one of them has been
+  seen running.** `scripts/capture-panel-animation.sh` and a granted Screen
+  Recording permission are the tools. Specifically unwatched and most likely
+  to be wrong:
+  - **The album glow's strength curve** (070). Radius and alpha are folded
+    into one slider; whether the chosen curve spans "barely there" to
+    "unmistakable" is a matter of looking at it.
+  - **The sneak peek's position and whether it collides with hover-expand**
+    (072). It draws below the pill in the transparent part of the window and
+    sets `allowsHitTesting(false)`; that it stays clear of the hover region is
+    reasoned from decision 012's hit model, not watched.
+  - **Full-screen hiding against a real full-screen app** (076). The
+    `visibleFrame` vs `frame` heuristic is cheap and needs no Accessibility
+    grant, but whether it fires on every full-screen style — native full
+    screen, a game, a player that hides the menu bar without taking a Space —
+    is exactly the class of claim Agent Guideline #4 exists for.
+  - **The pinned-display picker with a second monitor actually attached**
+    (075). The UUID matching and `applyGeometry(force:)` path have never run
+    against real hardware.
+  - **Capture exclusion** (077). Note it also hides the panel from
+    `scripts/capture-panel-animation.sh`, so verify it with the setting on,
+    then turn it off before capturing anything else.
+
+- [ ] **Look at Album tint (decision 064)** — verified as pixels out of the
+      real derivation code, not as a photograph. Settings ▸ General ▸ Expanded
+      panel ▸ **Album tint**, with something playing. Expect a clear cast in
+      the cover's hue across the panel body, and the top ~53pt still black
+      where it meets the notch. The Settings card should now show the tint too
+      — it previously showed plain glass. If it lands too strong or too weak,
+      `PanelTint.washOpacity` (0.22) and `PanelTint.maxBrightness` (0.62) in
+      `Views/NotchStyle.swift` are the only two knobs. `TEMPO_DEBUG_VIZ=1`
+      prints the derived tint, or says the cover is missing/unsamplable.
+
+- [ ] **Play something, then hover (decision 063)** — the media half of the
+      regrouped panel has never been drawn. Both Spotify and Music were paused
+      when it was verified, so `showsMedia` was false and the restructured
+      now-playing header, the scrubber, the full-width playlist row and the
+      group separator were all absent from the render. Check: the cover is
+      ~72pt (not ~104); title and artist stay centred over the play button;
+      the scrubber and the playlist picker each span the full 353pt content
+      width; and the hairline sits between the playlist row and the audio
+      output row with even air on both sides. `TEMPO_DEBUG_VIZ=1` prints the
+      measured height against the 680pt ceiling on every re-measure.
+
+- [ ] **Look at the panel over a bright window (decision 062)** — the one part
+      of the HIG pass that was built by reasoning rather than by sight. Four
+      places used to draw text with a `.black.opacity(0.5)` drop shadow to
+      survive clear glass; those are gone, replaced by a single scrim under the
+      whole content (0.30 for **Clear glass**, 0 for the denser styles, +0.22
+      on top of either under Increase Contrast). `screencapture` had no Screen
+      Recording grant in the session that made the change, so this was never
+      rendered over a real backdrop. Check the track title, the artist, the
+      transport glyphs, the scrubber's two clocks and the gear against a
+      **white** window in each of the four panel styles — Clear is the one at
+      risk. If Clear still washes out, `ContentView.contentScrim` is the single
+      knob. Regenerating the README shots is the same exercise:
+      `./scripts/capture-readme-shots.sh` (needs Screen Recording +
+      Accessibility on the invoking terminal), and **the current shots are now
+      stale** — they show the old 9pt shelf labels, the old flat-grey artwork
+      placeholder and the old colour-only agent dots.
+
+- [ ] **Sanity-check the four accessibility settings (decision 062)** — each
+      was implemented against the HIG and compiles, but only the greyscale
+      separation of the agent dots was actually measured. In *System Settings ▸
+      Accessibility ▸ Display*: **Reduce Transparency** should make the panel
+      opaque in every style; **Increase Contrast** should give every control a
+      resting plate and border and visibly deepen the panel; **Reduce Motion**
+      should leave the visualizer completely still (raised bars while audio
+      plays, flat when it stops) and swap the open/close spring for a fade.
+
+- [ ] **Watch the hello (decisions 057, 060, 061)** — Settings ▸ About ▸
+      *Show the welcome again* replays it without touching `hasSeenHello`.
+      The geometry is now Apple's published centreline artwork, so the shape
+      itself is not in question; what still needs eyes is the **motion**.
+      Check: it writes `h` → `he` → `hell` → `hello` left to right (Apple's
+      artwork is two subpaths and they are sequenced by arc length — if both
+      halves advance at once, `shares` is wrong); the panel springs open before
+      the pen touches down; the word **fades out** before the setup cards arrive
+      rather than being swapped for them; clicking the word skips; and the cards
+      fit inside the panel. The write-on timing curve was set by reasoning, not
+      by watching it — if it still reads wrong, that curve is the knob.
+
+- [ ] **Turn Tempo's notifications back on, then walk the setup rows
+      (decisions 057–060)** — **blocking for the lock-screen cards.** Probing
+      the real bundle this session found Tempo's notification authorization is
+      `denied` on this machine, and `requestAuthorization` returns
+      `UNErrorDomain#1 "Notifications are not allowed for this application"`
+      immediately: once macOS has a refusal on file it never prompts again. So
+      the app cannot fix this itself. Go to **System Settings ▸ Notifications ▸
+      Tempo** and turn **Allow Notifications** on (the sub-settings *Show on
+      Lock Screen* and *alerts* already read as enabled; **Show previews** is
+      `whenAuthenticated` and needs to be **Always**, or a locked card renders
+      as a contentless "Tempo · Notification"). Tempo re-reads the grant on
+      every activation now, so coming back from System Settings should flip the
+      row to a green check with no relaunch. Then the *Weather location* row
+      should appear and macOS should ask for **approximate** location (not
+      precise — if it asks for precise, `kCLLocationAccuracyReduced` is not
+      taking effect).
+      **Answered this session:** an ad-hoc-signed bundle *can* reach the
+      notification system — Tempo is registered in the notification database and
+      `add()` delivers. What blocks it is the recorded denial, not the
+      signature. (A probe bundle under `/private/tmp` is refused outright, so
+      don't diagnose this from a scratchpad copy — test the real
+      `dist/Tempo.app` in place.)
 
 - [ ] **See the lock-screen cards on a real lock screen (decision 058)** —
       with the cards on and something playing, lock the screen (⌃⌘Q) and look.
@@ -384,6 +624,96 @@
   (c) accept it and document. Awaiting the user's call. -->
 
 ## Recently completed
+
+- **2026-08-27 — The orphan reaper actually matches (decision 068).**
+  `MediaRemoteService.reapOrphanedStreams()` compares the adapter path
+  case-insensitively; the duplicate PPID-1 backstop is removed from
+  `scripts/make-app.sh`. SIGKILL itself is unfixable and stays that way.
+
+- **2026-08-27 — SIGTERM/SIGINT are clean quits (decision 067).**
+  `AppDelegate.installSignalHandlers()`; `scripts/make-app.sh` gains a comment
+  on why it still uses `kill` rather than `osascript … to quit` (its PPID-1
+  reap was removed again by 068 as a duplicate). Verified: SIGTERM exits in 0.04s with the adapter
+  reaped, SIGINT the same, a rebuild leaves exactly one tempo and one adapter,
+  and a deliberate SIGKILL orphan is reaped on the next run.
+
+- **2026-08-27 — Quit Tempo in Settings ▸ About (decision 066).** New section
+  in `SettingsView.AboutPane` below the version;
+  `NSApplication.shared.terminate(nil)`. README ▸ Settings ▸ About updated.
+
+- **2026-08-27 — The close no longer flashes black (decision 065).**
+  `ContentView.backgroundShape`'s silhouette is `.opacity(displayedExpanded ||
+  stripHidden ? 0 : 1)`; `.opacity(panelOpacity)` moved outside every
+  `expandAnimation` modifier and took a new `fadeAnimation`
+  (`.easeOut(0.18)`, `0.15` under Reduce Motion). New
+  `scripts/capture-panel-animation.sh` — the harness that found it.
+
+- **2026-08-26 — Album tint actually tints (decision 064).** `PanelTint` in
+  `Views/NotchStyle.swift` derives the wash; `ContentView.glassLayer` and
+  `PanelStylePreview` both paint it. `Glass.tint` still passed, now at full
+  alpha instead of 0.55. Works below macOS 26 for the first time.
+  `AppState.artwork.didSet` logs the derived tint under `TEMPO_DEBUG_VIZ=1`.
+
+- **2026-08-26 — Expanded panel regrouped (decision 063).** Media and system
+  blocks with a hairline between them; `PlaylistSection` moved out of the
+  header column to full width; `NotchMetrics.groupSpacing`; `hasSystemContent`
+  so the rule never draws over an empty group; panel ceiling 600 → 680 with a
+  debug-gated overflow log.
+
+- **2026-08-26 — HIG pass over every surface (decision 062).** New
+  `Views/NotchStyle.swift`: `NotchType` (7 named roles → macOS text styles),
+  `NotchMetrics` (2 hit targets, 3 spacing steps, the content inset) and
+  `AgentAppearance` / `AgentDot` (one state's colour, shape, glyph, motion and
+  spoken name, shared by the pill and the rows). Adopted across
+  ContentView, AgentLightsView, CollapsedAgentLight, NotchButtonStyle,
+  PlaybackProgressView, AudioOutputView, ShelfView, UsageGraphView,
+  PlaylistSection, VisualizerView, OnboardingView and SettingsView.
+  Reduce Transparency, Increase Contrast and Reduce Motion honoured;
+  VoiceOver labels and help tags added throughout (the scrubber is now an
+  adjustable element that VoiceOver can seek); the artwork placeholder became a
+  real empty state instead of a flat grey square.
+
+### 2026-08-25 — the cards could never post, and the hello was a cut (decision 060)
+
+Two reported bugs, both in the first-run surface shipped the day before.
+
+- **Lock-screen cards never appeared.** Root cause, measured against the real
+  bundle: notification authorization is `denied` and
+  `requestAuthorization` fails with `UNErrorDomain#1` with no prompt. Four
+  faults kept that invisible, all fixed — the request error was swallowed by
+  `_ = try? await` (a refusal is now recorded as `.denied`); nothing asked for
+  permission when the feature was switched **on** (`start()` now asks when the
+  state is `notDetermined`); the grant was read once inside `start()` and so
+  never noticed a fix made in System Settings (now re-read at launch, on every
+  `didBecomeActive`, and on the lock edge); and the cards posted at
+  `interruptionLevel = .passive`, which files a notification without presenting
+  it — now `.active`, still soundless.
+- **Artwork race fixed** — `withdraw(_:)` swept the attachment temp files, so
+  withdrawing the weather card could delete the music card's artwork before
+  `UNNotificationAttachment` had copied it. Files are now swept when writing the
+  next one.
+- **The hello is now Apple's actual lettering (decision 061).** Two hand-drawn
+  passes were both wrong in three independent ways — aspect 1.5:1 against
+  Apple's **3.36:1**, straight-diagonal ascenders against continuously curving
+  ones, and a 3pt hairline against Apple's **8% of the word's height**. Apple
+  publishes the word as *centreline* paths (`fill="none"`, `stroke-width="60"`),
+  which is the one form that works here: a filled glyph outline run through
+  `trimmedPath` would draw its contour, not a pen stroke. It is two subpaths, so
+  they are drawn in sequence weighted by arc length, and the stroke width is
+  derived from the rendered size rather than fixed. The `Text("Tempo")` label is
+  gone, timing is near-steady instead of `easeInOut`, and the word now **fades
+  out** before the cards arrive.
+  **Licensing note:** the artwork is "Copyright © 2020 Apple Inc. All rights
+  reserved." Swapping in an original word is a data-only change — the two
+  subpath arrays in `HelloScript` are the whole dependency.
+- Debug and release builds are clean with no warnings; `dist/Tempo.app` rebuilt
+  and relaunched.
+- **Also:** the System Settings link now deep-links to *Tempo's own*
+  notification page via `?id=<bundle-id>` (verified by reading back the window
+  title), rather than dumping the user in the app list.
+- **Not yet seen by a human:** the hello animating in the running app, and any
+  lock-screen card — the latter is blocked until notifications are re-allowed in
+  System Settings (see **Now**).
 
 ### 2026-08-24 — a first run, and the lock screen revisited (decisions 057–059)
 

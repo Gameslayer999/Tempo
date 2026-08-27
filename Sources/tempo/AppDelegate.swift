@@ -21,8 +21,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboarding: OnboardingController?
     private var settingsWindow: SettingsWindowController?
     private var cancellables = Set<AnyCancellable>()
+    /// Held for their lifetime — a `DispatchSourceSignal` stops delivering the
+    /// moment it is deallocated.
+    private var signalSources: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installSignalHandlers()
+
         let state = AppState()
         let media = MediaRemoteService(state: state)
         let shelf = ShelfService()
@@ -141,6 +146,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        // The token history and the pace bar read the same scan, so either
+        // switch keeps it running and only both being off stops it. It is a
+        // wider read than the per-session figures — every project's
+        // transcripts, not one session's — so it stays off until asked for
+        // (Agent Guideline #5).
+        prefs.$showUsageHistory
+            .combineLatest(prefs.$showRateLimitPace)
+            .sink { history, pace in
+                if history || pace {
+                    UsageHistoryService.shared.start()
+                } else {
+                    UsageHistoryService.shared.stop()
+                }
+            }
+            .store(in: &cancellables)
+
         // Same contract for the agent rows' token and timing figures
         // (decision 048), gated on *both* switches: the figures only exist on
         // those rows, so lights-off means the transcripts should not be read
@@ -166,6 +187,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     lockCards.stop()
                 }
+            }
+            .store(in: &cancellables)
+
+        // The grant state has to be live, and independent of the master switch:
+        // the pane and the hello row read it whether or not the feature is
+        // running, and the only way back from a denial is a trip to System
+        // Settings — which returns here as an activation, not as anything the
+        // notification centre tells us about (decision 060).
+        lockCards.refreshAuthorization()
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { _ in
+                Task { @MainActor in lockCards.refreshAuthorization() }
             }
             .store(in: &cancellables)
 
@@ -204,7 +237,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onboarding: onboarding
         )
         let panel = NotchPanel(state: state, prefs: prefs, content: content)
+
+        // Window flags the user can change while Tempo is running. Dropped on
+        // the first emission because `@Published` replays the current value on
+        // subscribe and the panel's own `init` has already applied it —
+        // without the drop, launch would redundantly reapply and, for the
+        // full-screen case, order the window out before it was ever shown.
+        prefs.$hideFromScreenCapture
+            .combineLatest(prefs.$fullScreenBehavior)
+            .dropFirst()
+            .sink { [weak panel] _, _ in
+                panel?.applyPrivacyAndSpaceBehavior()
+                panel?.applyFullScreenVisibility()
+            }
+            .store(in: &cancellables)
+
+        // Pinning a different display moves the notch, which is exactly what
+        // a screen-parameter change does, so it reuses that path.
+        prefs.$preferredDisplayUUID
+            .dropFirst()
+            .sink { [weak panel] uuid in
+                NotchGeometry.pinnedDisplayUUID = uuid
+                panel?.applyGeometry(force: true)
+            }
+            .store(in: &cancellables)
         panel.orderFrontRegardless()
+        // Launching straight into a full-screen Space is otherwise only
+        // corrected at the next Space or app change.
+        panel.applyFullScreenVisibility()
         self.panel = panel
 
         // Last, and only after the panel exists: the hello unrolls out of the
@@ -234,11 +294,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    /// Route SIGTERM and SIGINT through `NSApplication.terminate` instead of
+    /// letting the kernel's default disposition kill the process.
+    ///
+    /// AppKit does *not* turn either signal into a quit. Whatever the app has
+    /// arranged to do on the way out — here, `applicationWillTerminate` below,
+    /// which is the only thing that reaps the MediaRemote child and withdraws
+    /// the lock-screen cards — is simply skipped. Two ordinary things send
+    /// these: `scripts/make-app.sh` SIGTERMs the running Tempo before it
+    /// relaunches the new build, and ⌃C on a foreground `swift run` SIGINTs it.
+    /// Both were orphaning the adapter (decision 067).
+    ///
+    /// `SIG_IGN` first, then a dispatch source: the default disposition has to
+    /// be taken out of the way for the source to ever see the signal, and the
+    /// handler must not run in signal context — `NSApp.terminate` is nowhere
+    /// near async-signal-safe.
+    ///
+    /// **The source is on a global queue, not `.main`, and that is load-bearing.**
+    /// The obvious spelling — `makeSignalSource(signal:queue: .main)`, handler
+    /// calls `terminate` directly — compiles, installs, and never fires here.
+    /// Measured: with the source on `.main` the handler did not run at all
+    /// (`SIG_IGN` still took effect, so Tempo simply became immune to SIGTERM,
+    /// which is worse than the bug it was fixing); moving only the queue to
+    /// `.global()` made the same handler fire immediately. A main-queue source
+    /// can only deliver when the main run loop drains the main queue, and in
+    /// this app it was not doing so when the signal landed. Signal delivery
+    /// must not depend on that, so the source runs off the main queue and the
+    /// quit is hopped back onto it explicitly.
+    private func installSignalHandlers() {
+        for sig in [SIGTERM, SIGINT] {
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .global())
+            source.setEventHandler {
+                tempoDebug("signal \(sig) -> terminate")
+                DispatchQueue.main.async { NSApp.terminate(nil) }
+            }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
     /// The MediaRemote stream is a `/usr/bin/perl` child process. Nothing
     /// reparents it on quit, so without this it would outlive Tempo and keep
     /// streaming to a pipe no one reads. (A crash is covered by SIGPIPE — the
     /// next write to the closed pipe kills it — but a clean quit while nothing
     /// is playing produces no write, so it has to be terminated explicitly.)
+    ///
+    /// Reached from a signal too, not just a menu or the Settings button — see
+    /// `installSignalHandlers`.
     func applicationWillTerminate(_ notification: Notification) {
         media?.stop()
         music?.stop()

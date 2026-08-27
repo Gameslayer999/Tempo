@@ -28,11 +28,19 @@ wider than its content:
   expanding anything. By default it is one dot carrying the most urgent state
   across your Claude Code sessions: 🔴 an error · 🟠 one is blocked and needs
   you · ⚪️ solid white, one *just finished* and you haven't looked at it yet ·
-  🟢 any are working · dim grey, all idle. Only blocked pulses; nothing else
-  moves. The white dot goes out on the same click that clears the row's white
+  🟢 any are working · a hollow grey ring, all idle. Only blocked pulses;
+  nothing else moves. **Shape carries the state, not just colour** — the states
+  that want you draw as a full-size haloed dot, the ones that don't draw
+  smaller (running) or hollow (idle), so the light still reads on a greyscale
+  display or with any form of colour blindness. The white dot goes out on the same click that clears the row's white
   light in the panel, so the two never disagree. Switch it to
-  one dot per session (up to three), or off, in Settings ▸ Modules. It draws
+  one dot per session (up to three), or off, in Settings ▸ Agents. It draws
   nothing at all when no sessions are running.
+- a **sneak peek** when the track changes — the title and artist flash below
+  the notch for a few seconds and retract, so you find out what just started
+  without moving the pointer or opening anything. It is drawn over whatever is
+  behind it and takes no clicks. Length is adjustable, and it stays out of the
+  way while the panel is already open.
 
 When nothing has actually played for a minute — paused and forgotten, or no
 player running at all — the media UI switches off: the cover, the visualizer and the
@@ -56,11 +64,14 @@ playlist picker keeps it open; only a click outside unpins and collapses it. Hon
 setting (fades instead of springs).
 
 The expanded view is a Liquid Glass panel (macOS 26's design language; frosted
-material on older macOS), sized to its content, opening below the notch:
+material on older macOS), sized to its content, opening below the notch. It is
+in **two groups** — what's playing, then what your Mac is doing — set apart by a
+wider gap and a hairline, so the panel reads as two things rather than one long
+column:
 - **now playing**: the album cover slides down out of the pill and grows, with
-  the track and artist centred above the play / pause button, the previous /
-  play / next controls spread across the width beside the cover, and the
-  add-to-playlist row directly under them
+  the track and artist centred above the play / pause button and the previous /
+  play / next controls spread across the width beside the cover. The scrubber
+  and the add-to-playlist row sit under the whole block at full width
 - **progress bar** — elapsed time, a full-width scrubber and time remaining,
   under the cover and controls. **Drag the knob, or click anywhere on the bar,
   to jump to that point in the song**; the track jumps when you let go.
@@ -76,17 +87,28 @@ material on older macOS), sized to its content, opening below the notch:
   later and the shelf shows what it is holding: drag an item back out to any
   app, or right-click to reveal it in Finder or remove it. The copy means the
   shelf still works after you move or delete the original
-- **add the current song to a Spotify playlist** — the picker lists only
+- **add the current song to a Spotify playlist** — full width, under the
+  scrubber. The picker lists only
   playlists you can actually add to (your own, plus collaborative ones), or just
   the ones you ticked in Settings; if an add fails, Tempo says why rather than
   just flagging it. This one row is Spotify-only — it needs Spotify's own track
   id — so it is disabled while something else is playing
 - **system usage** — compact CPU and memory sparklines (last 60 s, iStat-style)
-- **agent session lights** — one row per open Claude Code session: a colored
+- **token history and pace** *(opt-in, off by default)* — the last seven days
+  of Claude Code token use and the model you leaned on most, plus a bar showing
+  how much of a rolling five-hour budget you have spent. The pace figure is an
+  **estimate** and is labelled as one: Claude Code does not record your real
+  rate limit anywhere Tempo can read, so you set the budget and Tempo shows the
+  busiest window it has actually measured so you can calibrate it. Counts
+  input, cache-creation and output tokens; excludes cache reads, which would
+  otherwise swamp every other number.
+- **agent session lights** — one row per open Claude Code session: a state
   light (🟢 running · 🟠 blocked, needs you · ⚪ finished and not yet seen ·
-  dim grey idle · 🔴 error), the session's folder, and a one-line description
+  hollow grey idle · 🔴 error), the session's folder, and a one-line description
   of what it is working on, so two sessions
-  in the same repo are told apart at a glance. Read from
+  in the same repo are told apart at a glance. With the extra room a row has,
+  the light also carries a glyph — `?` blocked, `!` error, a checkmark for
+  finished — so the state is legible without relying on its colour. Read from
   [AgentStatus](https://github.com/Gameslayer999/AgentStatus)'s status files. This is
   Tempo's differentiator over other notch apps. Those files record hook *events*,
   so Tempo cross-checks them against Claude Code's own view of each session
@@ -133,9 +155,9 @@ Measured ≈0.3% CPU idle on this machine.
 ## First run
 
 The first time Tempo launches, a cursive **hello** writes itself out of the
-notch — one continuous stroke, drawn over about two and a half seconds — and
-then the panel resolves into a short setup list. Click the word to skip
-straight to it.
+notch — Apple's own lettering, drawn as one pen stroke at a steady hand's pace
+over about two and a half seconds — holds for a beat, then fades out as the
+panel resolves into a short setup list. Click the word to skip straight to it.
 
 The list is the handful of things Tempo needs a human to say yes to, each
 showing its **live** state rather than a checkbox you tick:
@@ -145,7 +167,9 @@ showing its **live** state rather than a checkbox you tick:
   System Settings pane. (Tempo cannot read this permission's state, so this row
   tells you what will happen rather than claiming a status it can't verify.)
 - **Lock screen cards** — asks for notification permission, and switches the
-  lock-screen cards on if you allow it.
+  lock-screen cards on if you allow it. If you've refused before, macOS will not
+  ask again — the row says so and links to System Settings, which is the only
+  place that can undo it.
 - **Weather location** — appears once the cards are on; asks for *approximate*
   location so the weather card knows where you are. You can type a city instead.
 - **Spotify playlists** — optional, opens Settings ▸ Music (the Client ID needs
@@ -165,9 +189,15 @@ weather, and what's playing:
   card rather than stacking a new one
 - withdrawn when you unlock, so Notification Center isn't left holding them
 
-They're silent and passive: no sound, and they never wake a sleeping display.
-A card only appears when it has something true to say — no card for a paused
-player, none for weather that hasn't loaded.
+They're silent: no sound, and nothing that beeps at a sleeping Mac. A card only
+appears when it has something true to say — no card for a paused player, none
+for weather that hasn't loaded.
+
+Tempo asks for notification permission when you switch the cards on. If macOS
+has a refusal on file it will not prompt again, and the request fails
+immediately — Settings ▸ Weather and the first-run row both report that and link
+to **System Settings ▸ Notifications ▸ Tempo**, where **Allow Notifications**
+has to be turned back on by hand.
 
 **Tempo cannot draw on the lock screen.** macOS composites it in a secure
 context that excludes app windows at every window level; this was built,
@@ -192,39 +222,100 @@ same shape as System Settings. Opening it collapses the notch panel. Tempo has
 no Dock icon, so the gear is the usual way in; opening Tempo again from Finder
 while it is already running opens Settings too.
 
-- **General** — *Displays* ▸ **Show the strip on external displays** governs what
-  Tempo draws when there is no hardware notch to hug: with the lid closed, or on a
-  Mac with no built-in notch, it normally falls back to a small strip at the top
-  of whichever display carries the menu bar. Switch this off and that strip isn't
-  drawn — but Tempo is still there: move the pointer to the top middle of the
-  display and the panel opens as usual, with the same hover delay and the same
-  tick. While it is closed it is invisible *and* click-through, so the menu bar
-  underneath behaves exactly as if Tempo weren't running. On by default, and it
-  has no effect while the built-in display is available — Tempo already prefers
-  that display's real notch over every external monitor. *Expanded panel* picks
-  the material the open panel is drawn in,
-  by clicking a miniature of the panel drawn in that style: **Regular glass**
-  (default), **Clear glass** (near-transparent, with a slight scrim so the text
-  stays readable), **Album tint** (frosted glass tinted with the current cover's
-  dominant colour) or **Solid** (opaque, no glass). Each preview is the real
-  material over a stand-in desktop, so the translucent ones are actually
-  comparable side by side, and the tint preview carries the colour of whatever
-  is playing right now. The notch updates as you pick. On macOS below 26 there is no Liquid Glass, so the
-  three glass options fall back to the nearest system material. Also *Open Tempo
-  at login* (works from `dist/Tempo.app` only; a bare `swift build` binary has
-  no bundle to register, and the toggle says so), plus a reminder of the hover /
-  click / click-outside interaction model and a *Hover delay* slider —
-  0–400ms, 60ms by default — setting how long the pointer must rest on the
-  notch before the panel opens. The haptic tick fires at that same moment, so a
-  shorter delay is also more likely to land while your finger is still on the
-  trackpad; a longer one keeps a pointer that is only passing over the notch
-  from opening it, and 0 opens the instant the pointer arrives.
+- **General** — *Open Tempo at login* (works from `dist/Tempo.app` only; a bare
+  `swift build` binary has no bundle to register, and the toggle says so), plus
+  a reminder of the hover / click / click-outside interaction model and a
+  *Hover delay* slider — 0–400ms, 60ms by default — setting how long the
+  pointer must rest on the notch before the panel opens. The haptic tick fires
+  at that same moment, so a shorter delay is also more likely to land while
+  your finger is still on the trackpad; a longer one keeps a pointer that is
+  only passing over the notch from opening it, and 0 opens the instant the
+  pointer arrives.
+- **Appearance** — *Expanded panel* picks the material the open panel is drawn
+  in, by clicking a miniature of the panel drawn in that style: **Regular
+  glass** (default), **Clear glass** (near-transparent, with a slight scrim so
+  the text stays readable), **Album tint** (frosted glass carrying the current
+  cover's dominant colour — with nothing playing, or a cover Tempo can't
+  sample, it falls back to plain glass) or **Solid** (opaque, no glass). Each
+  preview is the real material over a stand-in desktop, so the translucent ones
+  are actually comparable side by side, and the tint preview carries the colour
+  of whatever is playing right now. The notch updates as you pick. On macOS
+  below 26 there is no Liquid Glass, so the three glass options fall back to the
+  nearest system material.
+
+  *Accent colour* follows your system accent or takes a custom pick. A colour
+  too dark to read on the panel is lightened until it is legible — the eight
+  macOS system accents already clear that bar and pass through untouched. The
+  accent never recolours the agent lights: those hues carry state.
+
+  *Album art* has two independent switches. **Glow** paints a bloom in the
+  cover's own colour behind the artwork, with a strength slider; **Blur behind
+  album art** puts a blurred, slightly enlarged copy of the cover behind it.
+  They read as different looks, so you can have either, both, or neither. Both
+  are drawn only in the expanded panel — in the collapsed pill the bloom would
+  spill past the black silhouette. Both switch off under Reduce Transparency.
+
+  *Visualizer colour* is white (the default), the accent colour, the current
+  cover's colour, or a spectrum — a hue per frequency band, warm in the centre
+  where the bass sits, cooling outward.
+- **Displays** — *Preferred display* pins the strip to one screen; left on
+  automatic, Tempo hugs the built-in notch whenever that display is available.
+  A pinned display that isn't currently attached falls back to automatic rather
+  than leaving the panel nowhere. **Show the strip on external displays**
+  governs what Tempo draws when there is no hardware notch to hug: with the lid
+  closed, or on a Mac with no built-in notch, it normally falls back to a small
+  strip at the top of whichever display carries the menu bar. Switch this off
+  and that strip isn't drawn — but Tempo is still there: move the pointer to
+  the top middle of the display and the panel opens as usual, with the same
+  hover delay and the same tick. While it is closed it is invisible *and*
+  click-through, so the menu bar underneath behaves exactly as if Tempo weren't
+  running.
+
+  *Full screen* chooses what happens when an app goes full screen: **Never
+  hide** (the default, and how every earlier version behaved), **Hide for the
+  app that's playing**, or **Hide for all apps**.
+
+  *Hide from screen capture* excludes the panel from screen sharing and
+  recording — Zoom, Meet, Teams, OBS and `screencapture` alike. Off by default.
+  Worth knowing: the agent lights and session labels are exactly the content
+  you don't want on a shared screen, and this also hides the panel from Tempo's
+  own capture script.
 - **Music** — a searchable list of your playlists: tick the ones you add songs
   to most and only those appear in the notch picker (tick none and all are
-  offered). Plus connection status, Connect / Disconnect, and a guided three-step
-  setup: a button that opens the Spotify Developer Dashboard, a copy button for
-  the exact Redirect URI, and the Client ID field. See below for why that setup
-  exists at all.
+  offered). Plus connection status, Connect / Disconnect, and a guided
+  three-step setup: a button that opens the Spotify Developer Dashboard, a copy
+  button for the exact Redirect URI, and the Client ID field. See below for why
+  that setup exists at all.
+
+  *Controls* is a five-slot editor for the transport row: drag a control onto a
+  slot, or pick it from the slot's menu, with a live preview and a reset. The
+  palette is **Previous**, **Play / Pause**, **Next**, **Mute** and **Empty** —
+  every action Tempo can actually carry out. Empty slots are skipped rather
+  than left as gaps, and the row stays centred on whatever sits in the middle.
+  Adding a song to a playlist is not a slot, because it needs a playlist chosen
+  — that button lives in the panel's playlist row, where the choice is.
+
+  *Sneak peek* flashes the title and artist under the notch when the track
+  changes, without opening the panel, for as long as its slider says. *Keep
+  media showing* sets how long after playback stops the notch keeps showing the
+  media wings — 60 seconds by default, because a pause to take a call is not
+  the end of listening; 0 keeps them up indefinitely.
+- **Agents** — the agent session lights and the token/timing figures on those
+  rows, and **Agent light**, which picks what the *collapsed* pill shows: a
+  summary dot (the default), one dot per session, or nothing. Switching the
+  figures off stops every transcript read.
+
+  *Usage* adds two opt-in surfaces, both off by default because they read every
+  project's transcripts rather than one session's. **Token history** shows the
+  last seven days and the model you used most. **Rate-limit pace** shows how
+  much of a rolling five-hour budget you've spent.
+
+  That pace figure is an **estimate**, and is labelled as one everywhere it
+  appears. Claude Code doesn't record your real rate limit anywhere on disk, so
+  Tempo cannot read it — you set the budget yourself, and Settings shows the
+  busiest five-hour window it has actually measured so you can calibrate rather
+  than guess. Tempo counts input, cache-creation and output tokens and excludes
+  cache reads; counting cache reads would swamp every other number.
 - **Weather** — the lock-screen cards and where their weather comes from.
   *Lock screen*: a master switch plus one per card (weather, what's playing).
   *Location*: **Use my location** (approximate — CoreLocation at reduced
@@ -235,16 +326,47 @@ while it is already running opens Settings too.
   System Settings switches described above. Switching the weather card off
   stops the network requests *and* the location manager — off means off.
 - **Modules** — show or hide the audio visualizer, the audio output row, the
-  file shelf, the CPU/memory graphs, the
-  agent session lights, and the token/timing figures on those rows. Switching
-  the graphs off stops their sampling timer entirely, and switching the figures
-  off stops every transcript read. Separately, **Agent light** picks what the
-  *collapsed* pill shows: a summary dot (the default), one dot per session, or
-  nothing.
-- **About** — version, and **Show the welcome again** to replay the first-run hello.
+  file shelf and the CPU/memory graphs. Switching the graphs off stops their
+  sampling timer entirely. Also **Show the welcome again**, which replays the
+  first-run hello.
+- **About** — version and **Quit Tempo**. Tempo has no Dock icon and no
+  menu-bar item, so that button is the only way out apart from ⌘Q while the
+  Settings window is in front. Quitting stops everything — the panel, the
+  lock-screen cards, the agent lights — and withdraws any cards already
+  delivered. Open Tempo from Finder or Spotlight to bring it back; with *Open
+  Tempo at login* on it also returns at your next login.
 
 Standard editing shortcuts (⌘V, ⌘C, ⌘X, ⌘A, ⌘Z) work in the Settings window, and
 ⌘Q there quits Tempo.
+
+## Accessibility
+
+Tempo follows the four macOS accessibility settings that apply to a surface
+like this one. All of them live in *System Settings ▸ Accessibility ▸ Display*
+and none of them need anything switched on inside Tempo.
+
+- **Reduce Transparency** — the expanded panel drops Liquid Glass entirely and
+  draws opaque, whichever panel style is selected. (Album tint deliberately
+  does *not* survive as an opaque tint: the point of the setting is that
+  nothing behind the window shows through, and a tint that changes with the
+  track is its own kind of distraction.)
+- **Increase Contrast** — the panel gains a deeper scrim under its content and
+  a harder rim light, and every control in it keeps a visible plate and border
+  at rest instead of appearing only when you hover it.
+- **Reduce Motion** — the panel opens and closes with a short fade rather than
+  a spring, the first-run `hello` appears already written, controls stop
+  growing under the pointer, and the visualizer stops moving: it shows a fixed
+  raised bar profile while audio is playing and a flat row when it isn't, so
+  you still get the "something is playing" signal without the animation.
+- **Colour** — no state in Tempo is carried by colour alone. The agent lights
+  differ in fill, size and glyph as well as hue; the current audio output chip
+  is outlined, not just tinted.
+
+Text throughout uses the system's named text styles, so it tracks your text
+size setting rather than being pinned to fixed point sizes. Controls, tooltips
+and VoiceOver labels are present on the transport buttons, the scrubber (which
+is an adjustable element — VoiceOver can seek it), the mute button, the output
+chips, the shelf items and every agent row.
 
 ## Requirements
 

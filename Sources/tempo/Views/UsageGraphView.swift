@@ -35,12 +35,12 @@ private struct StatCell: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: symbolName)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
+                .font(NotchType.subtitle)
+                .foregroundStyle(.secondary)
 
             Text(valueText)
-                .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                .foregroundColor(valueColor)
+                .font(NotchType.figure.weight(.semibold))
+                .foregroundStyle(valueColor)
                 .frame(minWidth: 26, alignment: .leading)
 
             ZStack {

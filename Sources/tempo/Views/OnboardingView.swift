@@ -34,7 +34,7 @@ struct OnboardingView: View {
         // is added outside it, so the content laid out at panelWidth + 52pt
         // inside a panel exactly panelWidth wide. Pad first, then frame — the
         // same order `ContentView.expandedContent` uses.
-        .padding(.horizontal, NotchShape.expandedTopRadius + 7)
+        .padding(.horizontal, NotchMetrics.contentInset)
         .padding(.top, 14)
         .padding(.bottom, 18)
         .frame(width: NotchGeometry.panelWidth, alignment: .top)
@@ -43,56 +43,79 @@ struct OnboardingView: View {
     // MARK: hello
 
     private var helloStroke: some View {
-        VStack(spacing: 10) {
+        // The stroke weight is Apple's own — 8% of the word's height — so it
+        // has to follow whatever size the word is actually drawn at rather than
+        // being a fixed point value. `GeometryReader` supplies that size and
+        // `HelloScript.lineWidth(fitting:)` derives it from the same fit the
+        // shape performs, so the two cannot drift apart (decision 061).
+        GeometryReader { geo in
             HelloScript(progress: onboarding.strokeProgress)
                 // Round caps and joins are what make a drawn stroke read as a
-                // pen rather than as a plotted curve.
-                // Thin and even, which is the single most recognisable thing
-                // about Apple's hello — a heavier stroke reads as a logo
-                // rather than as handwriting.
-                .stroke(style: StrokeStyle(lineWidth: 3.2, lineCap: .round, lineJoin: .round))
-                .foregroundStyle(.white)
-                .frame(height: 96)
-                // Reduce Motion gets the finished word, not a 2.4s write-on
-                // (HIG, and the same rule the panel's spring follows).
-                .animation(
-                    reduceMotion ? nil : .easeInOut(duration: OnboardingController.strokeDuration),
-                    value: onboarding.strokeProgress
+                // pen rather than as a plotted curve — and Apple's artwork is
+                // authored with a round cap, so this matches it rather than
+                // merely resembling it.
+                .stroke(
+                    style: StrokeStyle(
+                        lineWidth: HelloScript.lineWidth(fitting: geo.size),
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
                 )
-
-            Text("Tempo")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.55))
-                // Fades in behind the tail of the stroke rather than landing
-                // with it, so the word stays the only thing moving.
-                .opacity(onboarding.strokeProgress > 0.75 ? 1 : 0)
-                .animation(.easeIn(duration: 0.5), value: onboarding.strokeProgress > 0.75)
+                .foregroundStyle(.white)
+                // Barely-there bloom: enough that the ink sits *in* the black
+                // panel rather than on it, well short of the neon-sign look a
+                // heavier halo gives this stroke weight.
+                .shadow(color: .white.opacity(0.18), radius: 7)
         }
-        // The whole word is a skip target. No visible "Skip" chrome: this is a
-        // three-second animation, and a button competing with it would be the
-        // loudest thing on a screen whose point is the writing.
-        .contentShape(Rectangle())
-        .onTapGesture { onboarding.skipToSetup() }
-        .onAppear {
-            if reduceMotion { onboarding.strokeProgress = 1 }
-        }
+        // Apple's word is 3.36 : 1, so at the panel's content width it wants
+        // about 105pt of height; this frame leaves it a little air top and
+        // bottom without letting it grow past the width.
+        .frame(height: 112)
+        .padding(.horizontal, 8)
+            // A hand writes at a near-steady speed. `easeInOut` over the whole
+            // word runs the middle at ~1.6x the average and then brakes hard
+            // into the `o`, which is most of what read as clunky; this eases in
+            // briefly, holds an even pace, and settles at the end.
+            // Reduce Motion gets the finished word, not a 2.6s write-on (HIG,
+            // and the same rule the panel's spring follows).
+            .animation(
+                reduceMotion ? nil : .timingCurve(0.2, 0, 0.35, 1, duration: OnboardingController.strokeDuration),
+                value: onboarding.strokeProgress
+            )
+            .opacity(onboarding.helloOpacity)
+            .animation(.easeInOut(duration: OnboardingController.fadeDuration), value: onboarding.helloOpacity)
+            // The whole word is a skip target. No visible "Skip" chrome: this
+            // is a three-second animation, and a button competing with it would
+            // be the loudest thing on a screen whose point is the writing.
+            .contentShape(Rectangle())
+            .onTapGesture { onboarding.skipToSetup() }
+            .accessibilityElement()
+            .accessibilityLabel("hello")
+            .accessibilityHint("Click to skip the animation")
+            .accessibilityAddTraits(.isButton)
+            .onAppear {
+                if reduceMotion { onboarding.strokeProgress = 1 }
+            }
     }
 
     // MARK: setup
 
     private var setupCards: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: NotchMetrics.sectionSpacing) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Tempo lives in your notch")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
+                    // `.title3` is 15pt on macOS — the size this already was,
+                    // now tracking the user's text-size setting.
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .accessibilityAddTraits(.isHeader)
                 Text("Hover the notch to open this panel. A few things need your say-so — all optional, all changeable in Settings.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .font(NotchType.subtitle)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            VStack(spacing: 8) {
+            VStack(spacing: NotchMetrics.rowSpacing) {
                 audioRow
                 notificationsRow
                 if prefs.showLockScreenCards && prefs.lockCardShowsWeather {
@@ -104,8 +127,14 @@ struct OnboardingView: View {
             HStack {
                 Button("Open Settings") { openSettings() }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .font(NotchType.subtitle)
+                    .foregroundStyle(.secondary)
+                    // The secondary escape route was a 11pt text run with no
+                    // padding — a ~60x13pt target. Padded out it clears the
+                    // same 28pt band the primary button sits in.
+                    .padding(.horizontal, 6)
+                    .frame(minHeight: NotchMetrics.hitTarget)
+                    .contentShape(Rectangle())
                 Spacer()
                 Button("Get Started") { onboarding.finish() }
                     .buttonStyle(GetStartedButtonStyle())
@@ -220,12 +249,27 @@ private struct SetupRow: View {
         /// Nothing to grant here, just something to know.
         case informational
 
+        /// Semantic, not literal white: the panel is forced to dark
+        /// appearance, so `.secondary` resolves to the same dimmed white these
+        /// opacities were hand-mixing — and unlike a hard-coded alpha it
+        /// brightens when the user turns on Increase Contrast.
         var color: Color {
             switch self {
             case .granted: return .green
-            case .pending: return .white.opacity(0.35)
+            case .pending: return .secondary
             case .denied: return .orange
-            case .informational: return .white.opacity(0.25)
+            case .informational: return Color.primary.opacity(0.3)
+            }
+        }
+
+        /// Spoken by VoiceOver and shown in the row's tooltip, so the state is
+        /// not carried by the glyph's colour alone.
+        var label: String {
+            switch self {
+            case .granted: return "allowed"
+            case .pending: return "not asked yet"
+            case .denied: return "denied"
+            case .informational: return "for information"
             }
         }
     }
@@ -240,27 +284,33 @@ private struct SetupRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
             Image(systemName: status == .granted ? "checkmark.circle.fill" : symbol)
-                .font(.system(size: 13))
+                .font(.body)
                 .foregroundStyle(status.color)
                 .frame(width: 18, height: 18)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .font(NotchType.control.weight(.medium))
+                    .foregroundStyle(.primary)
                 Text(detail)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(NotchType.caption)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: NotchMetrics.tightSpacing)
 
             if status != .granted, let actionTitle {
                 Button(actionTitle, action: action)
                     .buttonStyle(SetupActionButtonStyle())
+                    .accessibilityLabel("\(actionTitle) — \(title)")
             }
         }
+        // The whole row is one thing to read out, ending with the state the
+        // coloured glyph was the only carrier of.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(title), \(status.label)")
+        .help("\(title) — \(status.label). \(detail)")
     }
 }
 
@@ -270,12 +320,14 @@ private struct SetupActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.white.opacity(configuration.isPressed ? 0.6 : 0.95))
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
+            .font(NotchType.caption.weight(.medium))
+            .foregroundStyle(Color.primary.opacity(configuration.isPressed ? 0.6 : 0.95))
+            .padding(.horizontal, 11)
+            // Was ~18pt tall. These are the buttons the whole first run turns
+            // on, so they are the last place to make the user aim.
+            .frame(minHeight: NotchMetrics.compactHitTarget)
             .background(
-                Capsule().fill(.white.opacity(configuration.isPressed ? 0.22 : (hovering ? 0.18 : 0.12)))
+                Capsule().fill(Color.primary.opacity(configuration.isPressed ? 0.22 : (hovering ? 0.18 : 0.12)))
             )
             .contentShape(Capsule())
             .onHover { hovering = $0 }
@@ -288,12 +340,15 @@ private struct GetStartedButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .semibold))
+            .font(NotchType.control.weight(.semibold))
+            // Stays literal black-on-white: this is the flow's one filled
+            // button, and its contrast comes from being the inverse of the
+            // panel rather than from the appearance it sits in.
             .foregroundStyle(.black)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 16)
+            .frame(minHeight: NotchMetrics.hitTarget)
             .background(
-                Capsule().fill(.white.opacity(configuration.isPressed ? 0.75 : (hovering ? 1 : 0.92)))
+                Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.75 : (hovering ? 1 : 0.92)))
             )
             .contentShape(Capsule())
             .onHover { hovering = $0 }

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Tempo's Settings window content (decision 020): a System-Settings-shaped
@@ -19,14 +20,17 @@ struct SettingsView: View {
     let onboarding: OnboardingController
 
     enum Pane: String, CaseIterable, Identifiable {
-        case general, music, weather, modules, about
+        case general, appearance, displays, music, agents, weather, modules, about
 
         var id: String { rawValue }
 
         var title: String {
             switch self {
             case .general: return "General"
+            case .appearance: return "Appearance"
+            case .displays: return "Displays"
             case .music: return "Music"
+            case .agents: return "Agents"
             case .weather: return "Weather"
             case .modules: return "Modules"
             case .about: return "About"
@@ -36,7 +40,10 @@ struct SettingsView: View {
         var symbol: String {
             switch self {
             case .general: return "gearshape"
+            case .appearance: return "paintbrush"
+            case .displays: return "display"
             case .music: return "music.note"
+            case .agents: return "dot.radiowaves.left.and.right"
             case .weather: return "cloud.sun"
             case .modules: return "square.grid.2x2"
             case .about: return "info.circle"
@@ -62,22 +69,68 @@ struct SettingsView: View {
     @ViewBuilder
     private var detail: some View {
         switch selection ?? .general {
-        case .general: GeneralPane(prefs: prefs, state: state)
+        case .general: GeneralPane(prefs: prefs)
+        case .appearance: AppearancePane(prefs: prefs, state: state)
+        case .displays: DisplaysPane(prefs: prefs)
         case .music: MusicPane(api: api, prefs: prefs)
+        case .agents: AgentsPane(prefs: prefs, usage: UsageHistoryService.shared)
         case .weather: WeatherPane(prefs: prefs, weather: weather, location: location, lockCards: lockCards)
-        case .modules: ModulesPane(prefs: prefs)
-        case .about: AboutPane(onboarding: onboarding)
+        case .modules: ModulesPane(prefs: prefs, onboarding: onboarding)
+        case .about: AboutPane()
         }
     }
 }
 
-// MARK: General
+// MARK: - Shared rows
+
+/// A slider row in the shape every slider in this window uses: the label on
+/// the left, a fixed-width slider, and the current value right-aligned in
+/// monospaced digits so it cannot reflow as the slider moves.
+private struct SliderRow: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    /// The value as the user should read it — already carries its unit.
+    let valueText: String
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 10) {
+                Slider(value: $value, in: range, step: step)
+                    .frame(width: 170)
+                Text(valueText)
+                    .font(.callout.monospacedDigit())
+                    .foregroundColor(.secondary)
+                    .frame(width: 52, alignment: .trailing)
+            }
+        }
+    }
+}
+
+/// The caption every `footer:` in this window is drawn in.
+///
+/// Two initialisers, matching `Text`'s own: a literal keeps the markdown these
+/// footers use (`**bold**`, `` `code` ``), while a string already computed
+/// elsewhere — an enum's `detail`, say — is drawn verbatim so its punctuation
+/// is never reinterpreted as markup.
+private struct FooterText: View {
+    private let content: Text
+
+    init(_ key: LocalizedStringKey) { content = Text(key) }
+    init(verbatim string: String) { content = Text(string) }
+
+    var body: some View {
+        content
+            .font(.caption)
+            .foregroundColor(.secondary)
+    }
+}
+
+// MARK: - General
 
 private struct GeneralPane: View {
     @ObservedObject var prefs: Preferences
-    let state: AppState
-
-    @State private var artworkTint: NSColor?
 
     var body: some View {
         Form {
@@ -89,13 +142,9 @@ private struct GeneralPane: View {
                 .disabled(!prefs.isBundled)
             } footer: {
                 if !prefs.isBundled {
-                    Text("Available only when running the bundled Tempo.app — build it with `scripts/make-app.sh`.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    FooterText("Available only when running the bundled Tempo.app — build it with `scripts/make-app.sh`.")
                 } else if prefs.launchAtLoginNeedsApproval {
-                    Text("Approve Tempo in System Settings ▸ General ▸ Login Items for this to take effect.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    FooterText("Approve Tempo in System Settings ▸ General ▸ Login Items for this to take effect.")
                 } else if let error = prefs.launchAtLoginError {
                     Text(error)
                         .font(.caption)
@@ -104,15 +153,40 @@ private struct GeneralPane: View {
             }
 
             Section {
-                Toggle("Show the strip on external displays", isOn: $prefs.showStripOnExternalDisplays)
-            } header: {
-                Text("Displays")
-            } footer: {
-                Text("Tempo always hugs the built-in display's notch when that display is available. This governs the other case — the lid closed, or a Mac with no notch at all — where Tempo falls back to a small strip at the top of whichever display carries the menu bar. Off hides that strip: the panel still opens when you move the pointer to the top middle of the display, it just isn't drawn until then, and clicks there go straight through to whatever is behind it.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+                LabeledContent("Expand") { Text("Hover the notch") }
+                LabeledContent("Keep open") { Text("Click the panel") }
+                LabeledContent("Close") { Text("Click anywhere outside") }
 
+                SliderRow(
+                    title: "Hover delay",
+                    value: $prefs.hoverExpandDelayMS,
+                    range: Preferences.minHoverExpandDelayMS...Preferences.maxHoverExpandDelayMS,
+                    step: 10,
+                    valueText: "\(Int(prefs.hoverExpandDelayMS)) ms"
+                )
+            } header: {
+                Text("Interaction")
+            } footer: {
+                FooterText("How long the pointer must rest on the notch before the panel opens. The haptic tick fires at the same moment, so a shorter delay is also more likely to land while your finger is still on the trackpad. Longer keeps a pointer that is only passing over the notch from opening it. 0 opens the instant the pointer arrives.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Appearance
+
+/// Everything about how the panel and the collapsed pill *look*: the panel's
+/// material, the accent that tints its chrome, what is painted behind the
+/// artwork, and how the visualizer bars are coloured.
+private struct AppearancePane: View {
+    @ObservedObject var prefs: Preferences
+    let state: AppState
+
+    @State private var artworkTint: NSColor?
+
+    var body: some View {
+        Form {
             Section {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(PanelStyle.allCases) { style in
@@ -123,36 +197,66 @@ private struct GeneralPane: View {
             } header: {
                 Text("Expanded panel")
             } footer: {
-                Text(prefs.panelStyle.detail)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                FooterText(verbatim: prefs.panelStyle.detail)
             }
 
             Section {
-                LabeledContent("Expand") { Text("Hover the notch") }
-                LabeledContent("Keep open") { Text("Click the panel") }
-                LabeledContent("Close") { Text("Click anywhere outside") }
-
-                LabeledContent("Hover delay") {
-                    HStack(spacing: 10) {
-                        Slider(
-                            value: $prefs.hoverExpandDelayMS,
-                            in: Preferences.minHoverExpandDelayMS...Preferences.maxHoverExpandDelayMS,
-                            step: 10
-                        )
-                        .frame(width: 170)
-                        Text("\(Int(prefs.hoverExpandDelayMS)) ms")
-                            .font(.callout.monospacedDigit())
+                Picker("Accent", selection: accentSourceBinding) {
+                    ForEach(AccentSource.allCases) { source in
+                        Text(source.title).tag(source)
+                    }
+                }
+                ColorPicker("Colour", selection: customAccentBinding, supportsOpacity: false)
+                    .disabled(prefs.accentSource != .custom)
+                LabeledContent("As the notch draws it") {
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(NotchAccent.color(for: prefs))
+                            .frame(width: 44, height: 18)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.15))
+                            )
+                        Text(Preferences.hex(from: NotchAccent.nsColor(for: prefs)))
+                            .font(.system(.caption, design: .monospaced))
                             .foregroundColor(.secondary)
-                            .frame(width: 52, alignment: .trailing)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Accent as drawn, \(Preferences.hex(from: NotchAccent.nsColor(for: prefs)))")
+                }
+            } header: {
+                Text("Accent colour")
+            } footer: {
+                FooterText("The accent tints chrome only — chips, rims, the scrubber, the file-drop target. It deliberately never reaches the agent lights: red, orange, white, green and grey are the signal itself there, and repainting them one colour would take the meaning with it.\n\nThe panel is always drawn dark, so a colour too dark to see on it is mixed toward white until it clears 3:1 against the panel — 4.5:1 with Increase Contrast on. That keeps the hue exactly and spends only saturation. All eight macOS system accents already clear the floor, so the clamp fires only on a pick that would otherwise have been invisible; the swatch above is the colour after any lift, which is what the notch actually paints.")
+            }
+
+            Section {
+                Toggle("Glow behind the artwork", isOn: $prefs.albumGlow)
+                SliderRow(
+                    title: "Strength",
+                    value: $prefs.albumGlowStrength,
+                    range: 0...1,
+                    step: 0.05,
+                    valueText: "\(Int((prefs.albumGlowStrength * 100).rounded()))%"
+                )
+                .disabled(!prefs.albumGlow)
+                Toggle("Blurred cover behind the artwork", isOn: $prefs.albumArtBlur)
+            } header: {
+                Text("Album artwork")
+            } footer: {
+                FooterText("The glow is a bloom in the cover's own dominant colour, painted behind the artwork; strength scales its radius and its peak alpha together, from barely there to unmistakable. The blur is a separate look — a blurred copy of the cover sitting behind it — and the two combine in any order. Both need a cover: with no artwork neither is drawn, and nothing else on the panel changes.")
+            }
+
+            Section {
+                Picker("Bars", selection: $prefs.spectrogramPalette) {
+                    ForEach(SpectrogramPalette.allCases) { palette in
+                        Text(palette.title).tag(palette)
                     }
                 }
             } header: {
-                Text("Interaction")
+                Text("Visualizer")
             } footer: {
-                Text("How long the pointer must rest on the notch before the panel opens. The haptic tick fires at the same moment, so a shorter delay is also more likely to land while your finger is still on the trackpad. Longer keeps a pointer that is only passing over the notch from opening it. 0 opens the instant the pointer arrives.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                FooterText("\(prefs.spectrogramPalette.detail)\n\nEvery option is a colour mapping over the five band magnitudes the audio tap already publishes, so this changes how the bars look and nothing about what they measure or what they cost. The bars still move only while audio is playing.")
             }
         }
         .formStyle(.grouped)
@@ -162,6 +266,36 @@ private struct GeneralPane: View {
             // turn as `objectWillChange` would still see the old value.
             DispatchQueue.main.async { artworkTint = state.artworkTint }
         }
+    }
+
+    /// Picking "Custom" while no usable hex is stored would otherwise appear to
+    /// do nothing — `resolvedAccent` falls back to the system accent — so the
+    /// switch seeds the current system accent as the starting colour.
+    private var accentSourceBinding: Binding<AccentSource> {
+        Binding(
+            get: { prefs.accentSource },
+            set: { source in
+                if source == .custom, Preferences.color(fromHex: prefs.customAccentHex) == nil {
+                    prefs.customAccentHex = Preferences.hex(from: .controlAccentColor)
+                }
+                prefs.accentSource = source
+            }
+        )
+    }
+
+    private var customAccentBinding: Binding<Color> {
+        Binding(
+            get: {
+                Color(nsColor: Preferences.color(fromHex: prefs.customAccentHex) ?? .controlAccentColor)
+            },
+            set: { picked in
+                // A colour that cannot be expressed in sRGB hands back an empty
+                // string; keeping the previous hex beats storing a value that
+                // would silently resolve to the system accent.
+                let hex = Preferences.hex(from: NSColor(picked))
+                if !hex.isEmpty { prefs.customAccentHex = hex }
+            }
+        )
     }
 
     /// One preview card: the mini panel in that style, its name under it, and
@@ -196,9 +330,92 @@ private struct GeneralPane: View {
     }
 }
 
-// MARK: Music
+// MARK: - Displays
 
-/// Spotify account pane.
+/// One attached display, for the picker. A struct rather than the tuple
+/// `NotchGeometry.availableDisplays` returns, because `ForEach` needs an
+/// `Identifiable` and a tuple cannot be one.
+private struct DisplayOption: Identifiable {
+    let id: String
+    let name: String
+    let hasNotch: Bool
+}
+
+/// Which screen Tempo lives on, what it does when an app goes full screen, and
+/// whether it appears in a screen recording.
+private struct DisplaysPane: View {
+    @ObservedObject var prefs: Preferences
+
+    @State private var displays: [DisplayOption] = []
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Show Tempo on", selection: $prefs.preferredDisplayUUID) {
+                    Text("Automatic").tag("")
+                    ForEach(displays) { display in
+                        Text(display.hasNotch ? "\(display.name) (notch)" : display.name)
+                            .tag(display.id)
+                    }
+                    if isPinnedDisplayMissing {
+                        Text("Pinned display — not attached").tag(prefs.preferredDisplayUUID)
+                    }
+                }
+                Toggle("Show the strip on external displays", isOn: $prefs.showStripOnExternalDisplays)
+            } header: {
+                Text("Placement")
+            } footer: {
+                FooterText("Automatic hugs the built-in notched display whenever it is attached, and falls back to whichever display carries the menu bar — with the lid closed, or on a Mac with no notch at all. Pinning overrides that order and keeps Tempo on the display you chose. The choice is stored as the display's UUID, not its ID, because macOS reassigns display IDs across reconnects; a pinned display that is currently unplugged is remembered, and Tempo falls back to the automatic order until it returns.\n\n“Show the strip on external displays” governs that notchless fallback. Off hides the strip: the panel still opens when you move the pointer to the top middle of the display, it just isn't drawn until then, and clicks there go straight through to whatever is behind it.")
+            }
+
+            Section {
+                Picker("When an app is full screen", selection: $prefs.fullScreenBehavior) {
+                    ForEach(FullScreenBehavior.allCases) { behavior in
+                        Text(behavior.title).tag(behavior)
+                    }
+                }
+            } header: {
+                Text("Full screen")
+            } footer: {
+                FooterText(verbatim: prefs.fullScreenBehavior.detail)
+            }
+
+            Section {
+                Toggle("Hide Tempo from screen capture", isOn: $prefs.hideFromScreenCapture)
+            } header: {
+                Text("Privacy")
+            } footer: {
+                FooterText("Sets the panel's window sharing type to none, so screenshots, screen recordings and shared screens capture whatever is behind it instead of the panel. The agent labels are folder names and the task lines are prompt excerpts — exactly what should not land in a screen share.\n\nIt changes nothing about what you see, and it does not cover the lock-screen cards: those are notifications, composited by macOS, and out of Tempo's reach.")
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { refreshDisplays() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didChangeScreenParametersNotification
+        )) { _ in
+            refreshDisplays()
+        }
+    }
+
+    /// True when a display is pinned but is not among the attached ones — a
+    /// monitor that has been unplugged since. The picker keeps a row for it so
+    /// the choice reads as remembered rather than as a blank selection.
+    private var isPinnedDisplayMissing: Bool {
+        !prefs.preferredDisplayUUID.isEmpty
+            && !displays.contains { $0.id == prefs.preferredDisplayUUID }
+    }
+
+    private func refreshDisplays() {
+        displays = NotchGeometry.availableDisplays.map {
+            DisplayOption(id: $0.uuid, name: $0.name, hasNotch: $0.hasNotch)
+        }
+    }
+}
+
+// MARK: - Music
+
+/// The transport row, the track-change peek, how long paused media stays up,
+/// and the Spotify account.
 ///
 /// The developer-app setup cannot be removed: Spotify's AppleScript dictionary
 /// has no playlist support whatsoever (verified against Spotify 1.2.95.453 —
@@ -222,6 +439,37 @@ private struct MusicPane: View {
     var body: some View {
         Form {
             Section {
+                MusicControlSlotsEditor(prefs: prefs)
+            } header: {
+                Text("Transport row")
+            } footer: {
+                FooterText("Drag a control from the palette onto a slot, or drag one slot onto another to swap them. Every slot is also a menu of the same controls — that is the keyboard and VoiceOver path, and it does everything dragging does.\n\nEmpty slots are skipped rather than drawn as gaps: the panel lays out only the controls you assigned and spreads them evenly, so the row is centred as a whole under the track title and an odd number of controls puts the middle one on the centre line. That is why the default fills the middle three of five and leaves the ends empty — it centres Play / Pause.\n\nMute is Tempo's own output mute, not the player's. Adding to a playlist is deliberately not offered here: it needs a target playlist, and that choice lives in the panel's playlist row, which carries its own button.")
+            }
+
+            Section {
+                Toggle("Flash the track on a change", isOn: $prefs.sneakPeek)
+                SliderRow(
+                    title: "Stays up for",
+                    value: $prefs.sneakPeekSeconds,
+                    range: Preferences.minSneakPeekSeconds...Preferences.maxSneakPeekSeconds,
+                    step: 0.5,
+                    valueText: String(format: "%.1f s", prefs.sneakPeekSeconds)
+                )
+                .disabled(!prefs.sneakPeek)
+                SliderRow(
+                    title: "Paused media stays up",
+                    value: $prefs.mediaIdleSeconds,
+                    range: Preferences.minMediaIdleSeconds...Preferences.maxMediaIdleSeconds,
+                    step: 10,
+                    valueText: prefs.mediaIdleSeconds > 0 ? "\(Int(prefs.mediaIdleSeconds)) s" : "Never"
+                )
+            } header: {
+                Text("Playback")
+            } footer: {
+                FooterText("A track change flashes the new title and artist under the collapsed notch and then fades. It never expands the panel and never takes focus; hovering the notch still opens it as usual.\n\n“Paused media stays up” is how long after playback stops the artwork, visualizer and controls remain before Tempo stops treating media as active. A pause to take a call, a scrub, or an app switch is a gap in listening, not the end of it — which is why this is a slider and not the fixed 60 seconds it used to be. At the far left it never times out, and the media UI stays until the player itself goes away.")
+            }
+
+            Section {
                 LabeledContent("Status") {
                     Label(statusText, systemImage: statusSymbol)
                         .foregroundColor(statusColor)
@@ -242,9 +490,7 @@ private struct MusicPane: View {
             } header: {
                 Text("Spotify account")
             } footer: {
-                Text("Only used for adding the current song to a playlist. Artwork, the visualizer and the play / pause / skip controls all work without connecting anything.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                FooterText("Only used for adding the current song to a playlist. Artwork, the visualizer and the play / pause / skip controls all work without connecting anything.")
             }
 
             if api.isAuthed {
@@ -258,9 +504,14 @@ private struct MusicPane: View {
                             Button {
                                 playlistQuery = ""
                             } label: {
-                                Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 20, height: 20)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Clear the search field")
+                            .help("Clear")
                         }
                         Button(isLoadingPlaylists ? "Refreshing…" : "Refresh") { reloadPlaylists() }
                             .disabled(isLoadingPlaylists)
@@ -289,11 +540,9 @@ private struct MusicPane: View {
                 } header: {
                     Text("Playlists in the notch")
                 } footer: {
-                    Text(prefs.favoritePlaylistIDs.isEmpty
-                         ? "Tick the ones you add songs to most and only those appear in the notch picker. With none ticked, all \(api.playlists.count) are offered."
-                         : "\(prefs.favoritePlaylistIDs.count) selected. The notch picker offers these, starting on the first.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    FooterText(prefs.favoritePlaylistIDs.isEmpty
+                               ? "Tick the ones you add songs to most and only those appear in the notch picker. With none ticked, all \(api.playlists.count) are offered."
+                               : "\(prefs.favoritePlaylistIDs.count) selected. The notch picker offers these, starting on the first.")
                 }
             }
 
@@ -329,9 +578,7 @@ private struct MusicPane: View {
             } header: {
                 Text("One-time setup")
             } footer: {
-                Text("Spotify requires every app using its Web API to be registered under its own developer account, so this can't be skipped or shipped inside Tempo. Spotify's AppleScript interface — which drives everything else here — has no playlist commands at all, so there is no way around the Web API for this one feature.\n\nThe Client ID is not a secret (Spotify's PKCE flow publishes it). It is saved to ~/Library/Application Support/Tempo/config.json, owner-only, along with the tokens; nothing is sent anywhere but Spotify.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                FooterText("Spotify requires every app using its Web API to be registered under its own developer account, so this can't be skipped or shipped inside Tempo. Spotify's AppleScript interface — which drives everything else here — has no playlist commands at all, so there is no way around the Web API for this one feature.\n\nThe Client ID is not a secret (Spotify's PKCE flow publishes it). It is saved to ~/Library/Application Support/Tempo/config.json, owner-only, along with the tokens; nothing is sent anywhere but Spotify.")
             }
         }
         .formStyle(.grouped)
@@ -360,16 +607,21 @@ private struct MusicPane: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(isOn ? .accentColor : .secondary)
+                    .foregroundStyle(isOn ? Color.accentColor : .secondary)
                 Text(playlist.name)
                     .lineLimit(1)
-                    .foregroundColor(.primary)
+                    .foregroundStyle(.primary)
                 Spacer(minLength: 0)
             }
+            // A 20pt row in a 190pt scroller is a small target for a list the
+            // user ticks several of in a row.
+            .frame(minHeight: 24)
             .contentShape(Rectangle())
-            .padding(.vertical, 4)
+            .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(playlist.name)
+        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
     }
 
     private func reloadPlaylists() {
@@ -428,72 +680,336 @@ private struct MusicPane: View {
     }
 }
 
-// MARK: Modules
+// MARK: Transport row editor
 
-private struct ModulesPane: View {
+/// The five transport slots, laid out left to right the way the panel draws
+/// them (decision 074).
+///
+/// Two ways to fill a slot, and the second is not a fallback. Dragging is the
+/// direct one — a control from the palette onto a slot, or one slot onto
+/// another to swap them — but a drag is unreachable from the keyboard and
+/// invisible to VoiceOver, and decision 062 made that disqualifying. So every
+/// slot is also a pull-down menu of the same five controls, which does
+/// everything dragging does and is what the keyboard and VoiceOver drive.
+///
+/// The drag payload is a string rather than a `MusicControl`, because the drop
+/// has to tell a control arriving *from the palette* (assign it) from a slot
+/// arriving from elsewhere in the row (swap the two).
+private struct MusicControlSlotsEditor: View {
     @ObservedObject var prefs: Preferences
+
+    /// The slot the pointer is currently over during a drag, for the ring that
+    /// shows where the drop will land.
+    @State private var dropTarget: Int?
+
+    private static let palettePrefix = "control:"
+    private static let slotPrefix = "slot:"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Drag onto a slot")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                HStack(spacing: 8) {
+                    ForEach(MusicControl.allCases) { control in
+                        paletteChip(control)
+                    }
+                }
+            }
+
+            HStack(alignment: .top, spacing: 6) {
+                ForEach(0..<Preferences.musicControlSlotCount, id: \.self) { index in
+                    slot(index)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("In the panel")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                preview
+            }
+
+            HStack {
+                Button("Reset to default") {
+                    prefs.musicControlSlots = Preferences.defaultMusicControlSlots
+                }
+                .disabled(prefs.musicControlSlots == Preferences.defaultMusicControlSlots)
+                Spacer()
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// One draggable source in the palette. `.none` is a source too — dragging
+    /// it onto a slot is how a slot is emptied without opening its menu.
+    private func paletteChip(_ control: MusicControl) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: control.symbol)
+                .font(.body)
+                .frame(width: 34, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(0.07))
+                )
+            Text(control.title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+        }
+        .contentShape(Rectangle())
+        .draggable(Self.palettePrefix + control.rawValue)
+        .help(control.title)
+        .accessibilityLabel("\(control.title), drag onto a slot")
+    }
+
+    /// One slot: a draggable, droppable face carrying the assigned glyph, and
+    /// under it the menu that assigns the same thing without a drag.
+    private func slot(_ index: Int) -> some View {
+        let control = prefs.musicControlSlots[index]
+        return VStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(control == .none ? 0.04 : 0.09))
+                .frame(height: 38)
+                .overlay(
+                    Image(systemName: control.symbol)
+                        .font(.title3)
+                        .foregroundStyle(control == .none ? .secondary : .primary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(dropTarget == index ? Color.accentColor : Color.primary.opacity(0.12),
+                                lineWidth: dropTarget == index ? 2 : 1)
+                )
+                .contentShape(Rectangle())
+                .draggable(Self.slotPrefix + String(index))
+                .dropDestination(for: String.self) { payloads, _ in
+                    guard let payload = payloads.first else { return false }
+                    return handle(payload, at: index)
+                } isTargeted: { targeted in
+                    dropTarget = targeted ? index : (dropTarget == index ? nil : dropTarget)
+                }
+                .accessibilityLabel("Slot \(index + 1), \(control.title)")
+
+            Menu {
+                ForEach(MusicControl.allCases) { option in
+                    Button {
+                        prefs.musicControlSlots[index] = option
+                    } label: {
+                        Label(option.title, systemImage: option.symbol)
+                    }
+                }
+            } label: {
+                Text(control.title)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity)
+            }
+            .menuStyle(.button)
+            .controlSize(.small)
+            .help("Slot \(index + 1): \(control.title)")
+            .accessibilityLabel("Slot \(index + 1)")
+            .accessibilityValue(control.title)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// The panel's own layout at Settings scale: empty slots dropped, the rest
+    /// spread with equal spacers, which is what puts the middle control on the
+    /// centre line. Mirrors `ContentView`'s transport row exactly, so this
+    /// cannot show an arrangement the panel would not draw (UI Principle #4).
+    private var preview: some View {
+        let assigned = prefs.musicControlSlots.filter { $0 != .none }
+        return HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            ForEach(Array(assigned.enumerated()), id: \.offset) { _, control in
+                Image(systemName: control.symbol)
+                    .font(.title3)
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                Spacer(minLength: 0)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 44)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.85))
+        )
+        .overlay {
+            if assigned.isEmpty {
+                Text("No controls — the panel draws no transport row.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(assigned.isEmpty
+                            ? "Preview: no transport row"
+                            : "Preview: " + assigned.map(\.title).joined(separator: ", "))
+    }
+
+    /// Applies a dropped payload to `index`. A slot dragged onto another slot
+    /// swaps the two — the row is a fixed five wide, so there is nowhere to
+    /// insert into and a swap is the only reorder that keeps the width.
+    private func handle(_ payload: String, at index: Int) -> Bool {
+        if payload.hasPrefix(Self.slotPrefix) {
+            guard let source = Int(payload.dropFirst(Self.slotPrefix.count)),
+                  prefs.musicControlSlots.indices.contains(source),
+                  source != index else { return false }
+            prefs.musicControlSlots.swapAt(source, index)
+            return true
+        }
+        if payload.hasPrefix(Self.palettePrefix),
+           let control = MusicControl(rawValue: String(payload.dropFirst(Self.palettePrefix.count))) {
+            prefs.musicControlSlots[index] = control
+            return true
+        }
+        return false
+    }
+}
+
+// MARK: - Agents
+
+/// The agent lights, and the two token modules that read Claude Code's
+/// transcripts (decision 079).
+private struct AgentsPane: View {
+    @ObservedObject var prefs: Preferences
+    @ObservedObject var usage: UsageHistoryService
 
     var body: some View {
         Form {
             Section {
-                Toggle("Audio visualizer", isOn: $prefs.showVisualizer)
-                Toggle("CPU and memory graphs", isOn: $prefs.showUsageGraph)
                 Toggle("Agent session lights", isOn: $prefs.showAgentLights)
                 Toggle("Token and timing figures", isOn: $prefs.showAgentStats)
                     .disabled(!prefs.showAgentLights)
-                Toggle("Audio output and volume", isOn: $prefs.showAudioOutput)
-                Toggle("File shelf", isOn: $prefs.showFileShelf)
-            } header: {
-                Text("Show in the notch")
-            } footer: {
-                Text("The visualizer sits in the collapsed pill; the graphs, agent lights, audio row and file shelf appear in the expanded panel. Each also hides itself automatically when it has nothing to show.\n\nThe figures put each session's context size, total tokens spent and turn length on its row, read from Claude Code's own transcripts. Switching them off stops those reads entirely.\n\nThe file shelf opens the notch as a drop target when you drag a file near it, and keeps a copy you can drag back out later. Switching it off stops Tempo watching for drags at all.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Section {
                 Picker("Collapsed pill", selection: $prefs.collapsedAgentLight) {
                     ForEach(CollapsedAgentLightMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
             } header: {
-                Text("Agent light")
+                Text("Session lights")
             } footer: {
-                Text(prefs.collapsedAgentLight.detail)
+                FooterText("One light per open Claude Code session in the expanded panel, read from the status files under ~/.claude/status — Tempo only ever reads them, and installs no hooks of its own.\n\nThe figures put each session's context size, total tokens spent and turn length on its row, read from Claude Code's own transcripts. Switching them off stops those reads entirely.\n\n\(prefs.collapsedAgentLight.detail)")
+            }
+
+            Section {
+                Toggle("Seven-day token history", isOn: $prefs.showUsageHistory)
+            } header: {
+                Text("Token history")
+            } footer: {
+                FooterText("A bar per day for the last seven days, plus the model you spent the most on, rolled up from every project's transcripts under ~/.claude/projects. That is a wider read than the per-session figures above — every project rather than the sessions you have open — which is why it stays off until you ask for it.\n\nNumbers only are taken out of a transcript: a timestamp, a model name and the token counts. Prompt text, tool output and file paths are never decoded, retained or logged. Tempo counts input + cache-creation + output tokens and excludes cache reads, which dominate the raw totals and would make every figure here meaningless.")
+            }
+
+            Section {
+                Toggle("Five-hour pace bar", isOn: $prefs.showRateLimitPace)
+                SliderRow(
+                    title: "Window budget",
+                    value: $prefs.rateLimitWindowTokens,
+                    range: Preferences.minRateLimitWindowTokens...Preferences.maxRateLimitWindowTokens,
+                    step: 250_000,
+                    valueText: UsageHistoryService.shortTokens(Int(prefs.rateLimitWindowTokens))
+                )
+                .disabled(!prefs.showRateLimitPace)
+                Text(calibrationHint)
                     .font(.caption)
                     .foregroundColor(.secondary)
+                SliderRow(
+                    title: "Warn at",
+                    value: $prefs.rateLimitWarnPercent,
+                    range: Preferences.minRateLimitWarnPercent...Preferences.maxRateLimitWarnPercent,
+                    step: 1,
+                    valueText: "\(Int(prefs.rateLimitWarnPercent))%"
+                )
+                .disabled(!prefs.showRateLimitPace)
+            } header: {
+                Text("Rate-limit pace")
+            } footer: {
+                FooterText("This figure is an estimate. Claude Code persists no rate-limit signal on disk — verified on this machine — so Tempo cannot read your real limit, how much of it you have used, or when it resets. The bar compares tokens counted out of local transcripts in a rolling five-hour window against the budget you set here, and nothing else. Read it as a pace gauge, not as a limit.\n\nThe budget is therefore yours to calibrate: set it near the busiest window you actually run, shown above, rather than guessing. Counting matches the history above — input + cache-creation + output, cache reads excluded — so a budget set from that figure and the bar measure the same thing.\n\nPast the warning threshold the bar changes appearance, not just hue: a warning glyph appears, the percentage goes semibold, and the fill visibly crosses the mark drawn on the track.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// The only honest calibration Tempo can offer: the heaviest five-hour
+    /// window it has actually seen. Deliberately does not start the scan —
+    /// that read is what the pace switch turns on, and a Settings visit must
+    /// not sweep every project's transcripts on its own (Agent Guideline #5).
+    private var calibrationHint: String {
+        if usage.busiestWindowTokens > 0 {
+            return "Busiest five-hour window in the last seven days: "
+                + "\(UsageHistoryService.shortTokens(usage.busiestWindowTokens)) tokens."
+        }
+        if usage.lastScan == nil {
+            return "Nothing scanned yet — the busiest window Tempo has seen appears here "
+                + "after the first scan, which runs once the pace bar is on."
+        }
+        return "No token spend found in the last seven days, so there is nothing to calibrate against yet."
+    }
+}
+
+// MARK: - Modules
+
+private struct ModulesPane: View {
+    @ObservedObject var prefs: Preferences
+    let onboarding: OnboardingController
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Audio visualizer", isOn: $prefs.showVisualizer)
+                Toggle("CPU and memory graphs", isOn: $prefs.showUsageGraph)
+                Toggle("Audio output and volume", isOn: $prefs.showAudioOutput)
+                Toggle("File shelf", isOn: $prefs.showFileShelf)
+            } header: {
+                Text("Show in the notch")
+            } footer: {
+                FooterText("The visualizer sits in the collapsed pill; the graphs, audio row and file shelf appear in the expanded panel. Each also hides itself automatically when it has nothing to show.\n\nThe file shelf opens the notch as a drop target when you drag a file near it, and keeps a copy you can drag back out later. Switching it off stops Tempo watching for drags at all.\n\nThe agent lights and the token modules have their own pane.")
+            }
+
+            Section {
+                LabeledContent("Welcome") {
+                    Button("Show the welcome again") { onboarding.replay() }
+                }
+            } header: {
+                Text("First run")
+            } footer: {
+                FooterText("Replays the first-run hello and the permission steps in the notch.")
             }
         }
         .formStyle(.grouped)
     }
 }
 
-// MARK: About
+// MARK: - About
 
+/// What Tempo is, and the one thing you can do *to* Tempo rather than
+/// configure about it: quit.
+///
+/// Quit lives here because `LSUIElement` leaves Tempo with no Dock icon and no
+/// menu-bar item, so the main menu's ⌘Q is reachable only while the Settings
+/// window is key — which is not a way out anyone can be expected to find
+/// (decision 066).
 private struct AboutPane: View {
-    let onboarding: OnboardingController
-
     var body: some View {
         Form {
-            Section {
-                LabeledContent("Welcome") {
-                    Button("Show the welcome again") { onboarding.replay() }
-                }
-            } footer: {
-                Text("Replays the first-run hello and the permission steps in the notch.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
             Section {
                 LabeledContent("Version") { Text(version) }
                 LabeledContent("Agent status") { Text("~/.claude/status (read-only)") }
             } header: {
                 Text("Tempo")
             } footer: {
-                Text("A notch surface for what's playing, what your Mac is doing, and which Claude Code sessions need you.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                FooterText("A notch surface for what's playing, what your Mac is doing, and which Claude Code sessions need you.")
+            }
+            Section {
+                LabeledContent("Quit") {
+                    Button("Quit Tempo") { NSApplication.shared.terminate(nil) }
+                }
+            } footer: {
+                FooterText("Stops Tempo entirely — the notch panel, the lock-screen cards and the agent lights all go away. Tempo has no Dock icon or menu-bar item, so this pane is the only place it can be quit apart from ⌘Q while this window is in front. Open Tempo from Finder or Spotlight to bring it back; with “Open Tempo at login” on it also returns at your next login.")
             }
         }
         .formStyle(.grouped)
@@ -507,7 +1023,7 @@ private struct AboutPane: View {
     }
 }
 
-// MARK: Weather
+// MARK: - Weather
 
 /// The lock-screen cards and where their weather comes from (decisions 058,
 /// 059).
@@ -588,9 +1104,7 @@ private struct WeatherPane: View {
             } header: {
                 Text("Current conditions")
             } footer: {
-                Text("Weather comes from Open-Meteo, which needs no account and no key. Tempo sends it a rounded coordinate and nothing else — no identifier, and never your Mac's name or your session data.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                FooterText("Weather comes from Open-Meteo, which needs no account and no key. Tempo sends it a rounded coordinate and nothing else — no identifier, and never your Mac's name or your session data.")
             }
         }
         .formStyle(.grouped)
@@ -601,6 +1115,22 @@ private struct WeatherPane: View {
 
     @ViewBuilder
     private var authorizationNote: some View {
+        if lockCards.registrationBlocked {
+            // Checked first, because this is not a permission state at all and
+            // reporting it as one sends the user to a System Settings pane
+            // where Tempo does not appear (decision 081).
+            VStack(alignment: .leading, spacing: NotchMetrics.tightSpacing) {
+                Text("macOS did not answer Tempo's request to read its notification settings, so no card can be posted and there is nothing here for the Notifications pane to fix.")
+                Text("Observed once on this machine with an ad-hoc signed build, where the call never returned rather than failing. It has since answered normally. If this message is showing, a rebuild — `scripts/make-app.sh` — and a relaunch is the first thing to try.")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            authorizationStateNote
+        }
+    }
+
+    @ViewBuilder
+    private var authorizationStateNote: some View {
         switch lockCards.authorization {
         case .authorized, .provisional, .ephemeral:
             // Granted is not sufficient, and this is the trap the feature dies

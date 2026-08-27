@@ -26,10 +26,18 @@ enum NotchGeometry {
     /// alone lay out at 233pt including the strip; the sections that were not
     /// on screen at that moment (now-playing header ~113, progress bar ~20,
     /// shelf row 68, two more agent rows 60, plus 12pt of stack spacing each)
-    /// add ~290pt, for ~525pt in the fullest case. 600 clears that with
-    /// margin, and margin is free: the window is transparent outside the drawn
-    /// shape and passes clicks through (`NotchHostingView.hitTest`).
-    static let panelHeight: CGFloat = 600
+    /// add ~290pt, for ~525pt in the fullest case.
+    ///
+    /// Raised from 600 to 680 by decision 063, which regrouped the content:
+    /// the media block gained the playlist row that used to be folded into
+    /// the header's column (+~42), lost ~32 of cover height in exchange, and
+    /// a group separator with 16pt of air on each side replaced one 12pt gap
+    /// (+21). Net ~+31, for ~556 in the fullest case. The extra margin is
+    /// free — the window is transparent outside the drawn shape and passes
+    /// clicks through (`NotchHostingView.hitTest`) — and running out of it is
+    /// not a graceful failure: anything laid out past this line is simply
+    /// never drawn, so the bottom section disappears with no other symptom.
+    static let panelHeight: CGFloat = 680
 
     /// The screen Tempo hugs, and the notch dimensions read off it.
     ///
@@ -49,9 +57,54 @@ enum NotchGeometry {
     /// `screens`, which (unlike `NSScreen.main`) does not depend on where the
     /// key window is, and Tempo deliberately never has one.
     private static func resolveScreen() -> NSScreen? {
-        NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
+        // A pinned display wins over the built-in notch (decision 075) — that
+        // is the whole point of pinning. It is matched by UUID rather than by
+        // `CGDirectDisplayID`, which macOS reassigns across reconnects, so a
+        // monitor unplugged and plugged back in is still recognised. A pin to
+        // a display that is not currently attached falls through to the
+        // automatic order rather than leaving the panel nowhere.
+        let pinned = pinnedDisplayUUID
+        if !pinned.isEmpty,
+           let match = NSScreen.screens.first(where: { displayUUID(for: $0) == pinned }) {
+            return match
+        }
+        return NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
             ?? NSScreen.screens.first
             ?? NSScreen.main
+    }
+
+    /// Mirror of `Preferences.preferredDisplayUUID` (decision 075).
+    ///
+    /// `resolveScreen` is reached from `targetScreen`'s lazy static
+    /// initialiser, which carries no actor, while `Preferences` is
+    /// `@MainActor` — so the value is mirrored here instead of read across the
+    /// boundary. Every write goes through `Preferences`, which is main-actor
+    /// isolated, so the writes are serialised even though the annotation
+    /// cannot prove it; reads are of a single word and may race only with a
+    /// change the user just made, whose own `applyGeometry` follows
+    /// immediately behind it.
+    nonisolated(unsafe) static var pinnedDisplayUUID = ""
+
+    /// Stable identifier for a display, used to persist the pinned-display
+    /// choice. `nil` when the screen has no backing `CGDirectDisplayID` — a
+    /// case that does occur mid-reconfiguration — and callers treat that as
+    /// "not the pinned one" rather than as an error.
+    static func displayUUID(for screen: NSScreen) -> String? {
+        guard let number = screen.deviceDescription[
+            NSDeviceDescriptionKey("NSScreenNumber")
+        ] as? NSNumber else { return nil }
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(
+            CGDirectDisplayID(number.uint32Value)
+        )?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
+    }
+
+    /// Every attached display, for the Settings picker.
+    static var availableDisplays: [(uuid: String, name: String, hasNotch: Bool)] {
+        NSScreen.screens.compactMap { screen in
+            guard let uuid = displayUUID(for: screen) else { return nil }
+            return (uuid, screen.localizedName, screen.safeAreaInsets.top > 0)
+        }
     }
 
     private static func resolveRaw(_ screen: NSScreen?) -> (width: CGFloat, height: CGFloat) {
@@ -280,6 +333,7 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
 final class NotchPanel: NSPanel {
     private var globalClickMonitor: Any?
     private var screenObserver: Any?
+    private var spaceObservers: [NSObjectProtocol] = []
     private var settleTask: Task<Void, Never>?
     private let state: AppState
     private let prefs: Preferences
@@ -334,6 +388,7 @@ final class NotchPanel: NSPanel {
         hasShadow = false
         isMovable = false
         isReleasedWhenClosed = false
+        applyPrivacyAndSpaceBehavior()
         // The content is designed dark (black pill, white-on-dark controls) and
         // the expanded panel's materials must render dark regardless of the
         // user's system appearance.
@@ -438,6 +493,92 @@ final class NotchPanel: NSPanel {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.screenParametersChanged() }
         }
+
+        // Entering or leaving full screen is a Space switch, and activating a
+        // different app can land on a Space that is already full screen. Both
+        // edges have to be watched or the panel stays hidden after the user
+        // has left the full-screen app.
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [
+            NSWorkspace.activeSpaceDidChangeNotification,
+            NSWorkspace.didActivateApplicationNotification,
+        ] {
+            spaceObservers.append(workspace.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.applyFullScreenVisibility() }
+            })
+        }
+    }
+
+    /// Applies the two window flags that are user-adjustable, from one place
+    /// so the launch path and the settings-changed path cannot drift apart.
+    ///
+    /// `sharingType = .none` (decision 077) excludes the panel from screen
+    /// capture and sharing — Zoom, Meet, Teams, OBS and `screencapture` alike.
+    /// This is a window-server flag, not a drawing trick, so it needs no
+    /// permission and cannot be defeated by a compositing path the way the
+    /// glass tint was (decision 064).
+    ///
+    /// `.fullScreenAuxiliary` (decision 076) is what lets a non-activating
+    /// panel draw over a full-screen app at all. Dropping it is what "hide for
+    /// all apps" means at the window level; the per-app case additionally
+    /// orders the window out, because a Space that is already full screen does
+    /// not re-evaluate collection behaviour on its own.
+    func applyPrivacyAndSpaceBehavior() {
+        sharingType = prefs.hideFromScreenCapture ? .none : .readOnly
+
+        var behavior: NSWindow.CollectionBehavior = [
+            .canJoinAllSpaces, .stationary, .ignoresCycle,
+        ]
+        if prefs.fullScreenBehavior != .allApps {
+            behavior.insert(.fullScreenAuxiliary)
+        }
+        collectionBehavior = behavior
+    }
+
+    /// Hides or restores the panel for the current full-screen state.
+    ///
+    /// Detected from the screen's own geometry rather than from any private
+    /// API: a Space showing a full-screen app hides the menu bar, so
+    /// `visibleFrame` reaches `frame`'s top edge; in every ordinary Space the
+    /// menu bar keeps them apart. That check costs nothing and needs no
+    /// Accessibility grant, which a window-list walk would.
+    func applyFullScreenVisibility() {
+        let behavior = prefs.fullScreenBehavior
+        guard behavior != .never else {
+            if !isVisible { orderFrontRegardless() }
+            return
+        }
+        guard let screen = NotchGeometry.targetScreen else { return }
+
+        // A Space showing a full-screen app hides the menu bar, so
+        // `visibleFrame` reaches `frame`'s top edge; in every ordinary Space
+        // the menu bar keeps them apart. Needs no private API and no
+        // Accessibility grant, which a window-list walk would.
+        let menuBarHidden = screen.visibleFrame.maxY >= screen.frame.maxY - 1
+
+        // `.mediaApp` hides only for the app that is actually playing. Without
+        // this the option would behave identically to `.allApps` — a control
+        // whose label promises something it does not do (UI Principle #4).
+        // The frontmost app is the one that owns the full-screen Space.
+        let shouldHide: Bool
+        switch behavior {
+        case .never:
+            shouldHide = false
+        case .allApps:
+            shouldHide = menuBarHidden
+        case .mediaApp:
+            let playing = state.nowPlaying?.sourceBundleID
+            let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            shouldHide = menuBarHidden && playing != nil && playing == front
+        }
+
+        if shouldHide {
+            if isVisible { orderOut(nil) }
+        } else if !isVisible {
+            orderFrontRegardless()
+        }
     }
 
     /// Re-reads the display layout and moves the window to match.
@@ -460,8 +601,13 @@ final class NotchPanel: NSPanel {
     /// Moves/resizes the window onto the current notch, and tells the SwiftUI
     /// content to re-lay out against the new dimensions. Both are skipped when
     /// nothing actually changed.
-    func applyGeometry() {
-        guard NotchGeometry.refresh() else { return }
+    /// `force` bypasses the "nothing changed" check. Pinning a different
+    /// display is the case that needs it: two identical external monitors
+    /// report identical frames, so the value comparison in `refresh()` cannot
+    /// see the move, and without this the panel would stay on the old screen.
+    func applyGeometry(force: Bool = false) {
+        let changed = NotchGeometry.refresh()
+        guard changed || force else { return }
         setFrame(NotchGeometry.windowFrame, display: true)
         // ContentView reads its widths from NotchGeometry on every body
         // evaluation; this is what makes it evaluate again.
@@ -470,6 +616,10 @@ final class NotchPanel: NSPanel {
 
     deinit {
         settleTask?.cancel()
+        let workspace = NSWorkspace.shared.notificationCenter
+        for observer in spaceObservers {
+            workspace.removeObserver(observer)
+        }
         if let screenObserver {
             NotificationCenter.default.removeObserver(screenObserver)
         }

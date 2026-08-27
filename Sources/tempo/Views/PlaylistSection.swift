@@ -32,8 +32,8 @@ struct PlaylistSection: View {
                     // gave the user nothing to act on (Agent Guideline #11).
                     if feedback == .failure, let error = api.lastAddError {
                         Text(error)
-                            .font(.system(size: 10))
-                            .foregroundColor(.orange)
+                            .font(NotchType.caption)
+                            .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -44,7 +44,7 @@ struct PlaylistSection: View {
     private var connectButton: some View {
         Button(action: { api.connect() }) {
             Label("Connect Spotify", systemImage: "link")
-                .font(.system(size: 12, weight: .medium))
+                .font(NotchType.control.weight(.medium))
         }
         .buttonStyle(NotchButtonStyle())
         .foregroundColor(.primary)
@@ -65,13 +65,13 @@ struct PlaylistSection: View {
                 // genuinely hard to open and gave no hint it was a control.
                 HStack(spacing: 6) {
                     Text(selectedName)
-                        .font(.system(size: 12))
+                        .font(NotchType.control)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.secondary)
+                        .font(NotchType.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
                 .foregroundColor(.primary)
                 .padding(.horizontal, 13)
@@ -104,6 +104,9 @@ struct PlaylistSection: View {
                     )
             )
             .disabled(offered.isEmpty)
+            .accessibilityLabel("Playlist")
+            .accessibilityValue(selectedName)
+            .help("Choose which playlist the add button adds to")
             .onHover { isPickerHovered = $0 }
             .animation(NotchButtonStyle.hoverAnimation, value: isPickerHovered)
 
@@ -163,10 +166,25 @@ struct PlaylistSection: View {
             }
         }
         .buttonStyle(NotchButtonStyle())
-        .foregroundColor(.primary)
-        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(.primary)
+        .font(.body.weight(.medium))
         .disabled(!canAdd || isAdding)
         .opacity(canAdd ? 1 : 0.35)
+        .accessibilityLabel(addAccessibilityLabel)
+        .help(canAdd
+              ? "Add this song to \(selectedName)"
+              : "Only songs playing in Spotify can be added to a playlist")
+    }
+
+    /// What the add button is currently saying. The three states were a
+    /// glyph swap and nothing else — a checkmark and a warning triangle read
+    /// identically to VoiceOver, and identically in greyscale.
+    private var addAccessibilityLabel: String {
+        switch feedback {
+        case .none: return "Add to \(selectedName)"
+        case .success: return "Added to \(selectedName)"
+        case .failure: return api.lastAddError ?? "Could not add to \(selectedName)"
+        }
     }
 
     /// Add-to-playlist is a Spotify Web API call, so it needs the Spotify

@@ -69,6 +69,19 @@ struct PlaybackProgressView: View {
                 .frame(height: Self.hitHeight)
             timeLabel("-" + Self.clock(progress.duration - position), alignment: .trailing)
         }
+        // One adjustable control to VoiceOver, not three unlabelled shapes:
+        // the two clocks are the value, the bar is the thing you change. Left
+        // as three separate elements it read out "0:42" and "-2:58" with no
+        // indication that anything here could be operated at all.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Playback position")
+        .accessibilityValue("\(Self.clock(position)) of \(Self.clock(progress.duration))")
+        .accessibilityAdjustableAction { direction in
+            // 5 seconds a step, matching what a arrow-key scrub does
+            // everywhere else on the platform.
+            let step: TimeInterval = direction == .increment ? 5 : -5
+            onSeek(min(max(position + step, 0), progress.duration))
+        }
     }
 
     private func track(fraction: Double) -> some View {
@@ -137,11 +150,10 @@ struct PlaybackProgressView: View {
     /// "-1:0…" — verified by rendering the view and reading the pixels.
     private func timeLabel(_ text: String, alignment: Alignment) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .medium).monospacedDigit())
-            .foregroundColor(.secondary)
+            .font(NotchType.figure.weight(.medium))
+            .foregroundStyle(.secondary)
             .lineLimit(1)
             .frame(width: labelWidth, alignment: alignment)
-            .shadow(color: .black.opacity(0.5), radius: 3)
     }
 
     /// Wide enough for "-h:mm:ss" past the hour mark, "-mm:ss" below it.
