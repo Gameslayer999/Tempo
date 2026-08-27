@@ -308,6 +308,25 @@ struct ContentView: View {
         }
         .frame(width: currentWidth, height: currentHeight, alignment: .top)
         .background(backgroundShape)
+        // The retracting outline is the only place the panel may draw. A
+        // SwiftUI subtree removed inside an animated transaction keeps the
+        // size it held and fades in place rather than following the frame
+        // inward, and both of the panel's `if displayedExpanded` branches are
+        // exactly that: on collapse the expanded column — output chips, gear,
+        // CPU and memory readouts — and the glass behind it both stayed at
+        // full panel width, fading over the desktop while the pill had already
+        // retracted into the notch (decision 082). Clipped here they are wiped
+        // by the shape as it closes.
+        //
+        // After `.background`, so the glass is clipped too and not only the
+        // content. The rim light is the one thing that must *not* be inside
+        // this clip — a stroke on the boundary would be halved by it — so it
+        // moved out of `backgroundShape` to the overlay below.
+        .clipShape(shape)
+        // Outside the clip, and always present rather than in a branch: a
+        // branch would freeze the stroke at full panel size on collapse and
+        // draw the very outline this clip exists to remove.
+        .overlay(borderLayer.opacity(displayedExpanded ? 1 : 0))
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard prefs.showFileShelf else { return false }
             receiveDrop(providers)
@@ -397,6 +416,17 @@ struct ContentView: View {
         .onChange(of: state.isPointerNearNotch) { _, near in handleHover(near) }
     }
 
+    /// Alpha of the black silhouette. `stripHidden` too, not just
+    /// `displayedExpanded`: black is only ever right because it merges with
+    /// the notch. On a notchless display with the strip switched off there is
+    /// no notch to merge with, and fading it in over the retracting glass drew
+    /// a black slab across someone else's menu bar for a few hundred
+    /// milliseconds (decision 065). The layer stays in the hierarchy at zero
+    /// alpha for the reasons in `backgroundShape`; its report goes unread in
+    /// exactly this case, because `activeRect` short-circuits to `.zero` here
+    /// (NotchWindow).
+    private var silhouetteOpacity: Double { displayedExpanded || stripHidden ? 0 : 1 }
+
     /// Collapsed: pure black, always (UI Principle #6 — must keep merging with
     /// the notch, never glass). Expanded (hover or pin): Liquid Glass body
     /// (macOS 26+) with a black-to-glass blend at the top so the seam against
@@ -418,16 +448,13 @@ struct ContentView: View {
         return ZStack(alignment: .top) {
             silhouette
                 .fill(Color.black)
-                // `stripHidden` too, not just `displayedExpanded`: black is
-                // only ever right because it merges with the notch. On a
-                // notchless display with the strip switched off there is no
-                // notch to merge with, and fading it in over the retracting
-                // glass drew a black slab across someone else's menu bar for
-                // a few hundred milliseconds (decision 065). The layer stays
-                // in the hierarchy at zero alpha for the reasons above; its
-                // report goes unread in exactly this case, because
-                // `activeRect` short-circuits to `.zero` here (NotchWindow).
-                .opacity(displayedExpanded || stripHidden ? 0 : 1)
+                // No `.animation` of its own, deliberately. Scoping the alpha
+                // to `fadeAnimation` here also scopes the *geometry* arriving
+                // from the frame above to it, and the silhouette then retracted
+                // in 0.18s while the panel it backs took the 0.45s spring —
+                // the pill reached the notch with the panel's content still
+                // spilling out around it. Measured (decision 082).
+                .opacity(silhouetteOpacity)
             if displayedExpanded {
                 ZStack(alignment: .top) {
                     // Hit-testable substrate. macOS routes clicks on a
@@ -464,7 +491,6 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .clipShape(shape)
-                .overlay(borderLayer)
             }
         }
     }
@@ -475,8 +501,11 @@ struct ContentView: View {
     /// blurred stroke under it that reads as the thickness of the material
     /// rather than a drawn outline.
     ///
-    /// Applied as an overlay *after* `clipShape`, so the stroke is not halved
-    /// by the clip. Masked to nothing across the top blend region: the panel's
+    /// Applied as an overlay on the panel *after* its `clipShape`, so the
+    /// stroke is not halved by the clip — and always present, alpha-gated
+    /// rather than branched, so it retracts with the frame instead of freezing
+    /// at full panel width on collapse (decision 082). Masked to nothing across
+    /// the top blend region: the panel's
     /// first `stripHeight` points must stay pure black to merge with the notch
     /// (UI Principle #6), and an outlined seam there would read as a floating
     /// box hanging off the notch.

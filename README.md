@@ -220,7 +220,9 @@ The gear in the expanded panel's top-right corner opens a standard macOS
 Settings window — sidebar of panes on the left, grouped form on the right, the
 same shape as System Settings. Opening it collapses the notch panel. Tempo has
 no Dock icon, so the gear is the usual way in; opening Tempo again from Finder
-while it is already running opens Settings too.
+while it is already running opens Settings too. Each pane's sidebar row carries
+its own coloured icon — grey General, purple Appearance, red Music, green
+Agents — so a pane is found by colour before it is read.
 
 - **General** — *Open Tempo at login* (works from `dist/Tempo.app` only; a bare
   `swift build` binary has no bundle to register, and the toggle says so), plus

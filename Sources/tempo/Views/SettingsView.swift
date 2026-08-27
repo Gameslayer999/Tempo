@@ -39,15 +39,50 @@ struct SettingsView: View {
 
         var symbol: String {
             switch self {
-            case .general: return "gearshape"
-            case .appearance: return "paintbrush"
+            case .general: return "gearshape.fill"
+            case .appearance: return "paintbrush.fill"
             case .displays: return "display"
             case .music: return "music.note"
             case .agents: return "dot.radiowaves.left.and.right"
-            case .weather: return "cloud.sun"
-            case .modules: return "square.grid.2x2"
-            case .about: return "info.circle"
+            case .weather: return "cloud.sun.fill"
+            case .modules: return "square.grid.2x2.fill"
+            case .about: return "info"
             }
+        }
+
+        /// The tile colour behind the glyph. System Settings gives every pane
+        /// its own colour so the row is found by colour before it is read;
+        /// these follow the same instinct and echo what the pane controls —
+        /// the agents pane green like a running light, weather sky blue.
+        var tint: Color {
+            switch self {
+            case .general: return Color(red: 0.45, green: 0.47, blue: 0.51)
+            case .appearance: return Color(red: 0.66, green: 0.36, blue: 0.86)
+            case .displays: return Color(red: 0.20, green: 0.55, blue: 0.92)
+            case .music: return Color(red: 0.95, green: 0.28, blue: 0.36)
+            case .agents: return Color(red: 0.20, green: 0.72, blue: 0.40)
+            case .weather: return Color(red: 0.24, green: 0.68, blue: 0.94)
+            case .modules: return Color(red: 0.96, green: 0.60, blue: 0.13)
+            case .about: return Color(red: 0.38, green: 0.42, blue: 0.90)
+            }
+        }
+    }
+
+    /// One sidebar row's icon: the pane's glyph in white on a rounded tile of
+    /// the pane's colour, the shape macOS System Settings uses. Drawn at the
+    /// list's own text size so the rows stay the height AppKit gives them.
+    private struct PaneIcon: View {
+        let pane: Pane
+
+        var body: some View {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(pane.tint.gradient)
+                .frame(width: 20, height: 20)
+                .overlay(
+                    Image(systemName: pane.symbol)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                )
         }
     }
 
@@ -56,8 +91,12 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             List(Pane.allCases, selection: $selection) { pane in
-                Label(pane.title, systemImage: pane.symbol)
-                    .tag(pane)
+                Label {
+                    Text(pane.title)
+                } icon: {
+                    PaneIcon(pane: pane)
+                }
+                .tag(pane)
             }
             .navigationSplitViewColumnWidth(min: 150, ideal: 168, max: 200)
         } detail: {

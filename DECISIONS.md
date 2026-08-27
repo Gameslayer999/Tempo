@@ -92,6 +92,8 @@
 | 079 | 2026-08-27 | Token history and an **estimated** five-hour pace bar, read from Claude Code's transcripts — not from `~/.claude/stats-cache.json`, which measured 10 days stale with every `costUSD` zero. Counts input + cache-creation + output and excludes cache reads, matching `SessionStatsService`; counting cache reads would have made every figure meaningless (175M of 180M on one real day). Claude Code persists no real rate-limit signal locally, so the budget is user-set and the word "estimate" is on the surface | Accepted |
 | 080 | 2026-08-27 | Settings restructured from five panes to eight — Appearance, Displays and Agents split out — so every new knob has an obvious home rather than extending Modules into a catch-all | Accepted |
 | 081 | 2026-08-27 | The sneak peek was inside `panelOpacity`'s scope, so it rendered at alpha 0 in clamshell with the strip hidden — the one configuration it was reported missing from. Moved outside it. Separately, the notification calls gain a 4s timeout: `notificationSettings()` was measured never returning under an ad-hoc signature, leaking a task per Settings-open and leaving the UI reporting a state that was not true | Accepted |
+| 082 | 2026-08-27 | The collapse on a **notched** Mac left the expanded content and the glass at full panel size, fading over the desktop after the pill was already back in the notch — a removed SwiftUI subtree keeps the size it had and does not follow the frame inward. Fixed by clipping the panel to its own retracting shape, with the rim light moved outside that clip. Curve changes were tried and reverted: `.animation(_:value:)` on the silhouette scopes the incoming geometry too, and retracted the pill faster than the panel it backs | Accepted |
+| 083 | 2026-08-27 | Settings sidebar icons become System-Settings-style tiles: the glyph in white on a rounded rect filled with a per-pane colour, rather than eight monochrome symbols. Colour is the fastest way to find a row in a fixed list, and the colours echo what each pane controls (green for Agents, sky blue for Weather) | Accepted |
 
 ---
 
@@ -5220,3 +5222,129 @@ shipped the same wrong conclusion this investigation reached and discarded.
 Diagnosing this needed the app's own logging, and it took three instrumentation
 rounds because none of the paths involved reported anything. The lines added
 here are the ones that would have answered it in one.
+
+---
+
+## 082 — The close on a notched Mac: the panel retracted, its contents did not
+
+**Date:** 2026-08-27 · **Status:** Accepted · **Fixes 065**
+
+### Context
+
+Decision 065 fixed "the weird black fade out" on a *notchless* display and
+closed with "notched-Mac behaviour unchanged by construction." That was true,
+and it was the problem: the built-in MacBook screen still had a fade-out of its
+own, reported the same way. It is a different defect with the same symptom, and
+it needed the same method to find — `scripts/capture-panel-animation.sh`, read
+frame by frame, because nothing about it is visible in a description.
+
+### What the frames showed
+
+Recorded on the built-in Liquid Retina display at 25fps, cropped to the notch.
+Over the 0.45s collapse, three layers came apart:
+
+- **The black silhouette** retracted correctly, reaching pill size in ~0.28s.
+- **The expanded column** — output chips, gear, mute, the CPU/memory readouts —
+  stayed at **full panel size** and faded out on the collapse spring. At
+  t+0.16s through t+0.24s "MacBook Air Speakers" and "Tempo Visualizer Tap" are
+  plainly legible floating over the desktop with no panel behind them.
+- **The glass** did the same: its slab was still on screen after the pill was
+  back in the notch.
+
+The cause is one SwiftUI rule applied twice. A subtree removed inside an
+animated transaction keeps the size it held at removal and fades in place — it
+does not follow the frame inward. The panel's `.frame(width:height:)` shrinks;
+neither the removed content nor the removed glass branch is clipped by it, so
+both were left hanging at 640-ish points wide while the shape they belonged to
+was already gone.
+
+### Options
+
+| | Approach | Verdict |
+|---|---|---|
+| A | Shorten the collapse spring | Rejected — makes the ghost briefer, not absent, and 065 already tuned this curve |
+| B | Fade the content faster | Half a fix — still a full-size panel over the desktop, just for less time |
+| C | Clip the panel to its own retracting shape | **Chosen** — the content is wiped by the closing outline instead of hanging in the air |
+| D | Keep the glass in the hierarchy at zero alpha so it shrinks with the frame | Rejected — runs the Liquid Glass compositor at all times for a case a clip already solves |
+
+### Decision
+
+1. `.clipShape(shape)` on the panel, placed **after** `.background(...)` so it
+   takes the glass as well as the content. Both branches still freeze at full
+   size when removed; the clip is what makes that invisible.
+2. The rim light moves out of `backgroundShape` to an overlay applied *after*
+   that clip — a stroke on the boundary would be halved by it — and is
+   alpha-gated rather than branched, so it retracts with the frame instead of
+   becoming the very outline the clip exists to remove.
+3. Everything else stays on the collapse spring. Two curve changes were tried
+   first and both reverted: pinning the glass's removal to `fadeAnimation`, and
+   pinning the silhouette's alpha to it. The second was actively wrong and the
+   frames show why — `.animation(_:value:)` scopes the *geometry* arriving from
+   the frame above as well as the alpha, so the black pill retracted in 0.18s
+   while the panel it backs took the 0.45s spring, and the content spilled out
+   around a pill that had already reached the notch. One artifact traded for
+   another.
+
+### Consequences
+
+Nothing is drawn outside the silhouette at any point in the animation, opening
+or closing. Measured on the built-in display, before and after: the ghost ran
+from t+0.04s to t+0.32s before ("MacBook Air Speakers" and "Tempo Visualizer
+Tap" legible over the desktop with no panel behind them, the readouts with
+them); after, every frame of the close is content inside the outline, and the
+pill settles pure black. The open reads better too, as a side effect — the
+column now unrolls out of the notch instead of appearing at full width inside a
+growing shape.
+
+The expanded panel is unchanged. Checked at matched frames before and after,
+including a zoom on the left edge: the rim light is the same weight in its new
+position outside the clip.
+
+`.clipShape` also clips hit testing, which is harmless here: `.contentShape`
+is applied after it and defines the hit region explicitly, and the expanded
+content is inside the shape by construction.
+
+Verified on screen with `scripts/capture-panel-animation.sh`. Three earlier
+runs of it caught no panel at all while a full-screen app owned the notch; that
+is a property of those runs and not a Tempo defect — the panel opens there.
+
+---
+
+## 083 — The Settings sidebar gets coloured icons
+
+**Date:** 2026-08-27
+
+### Context
+
+The eight-pane sidebar of decision 080 drew every row with a plain SF Symbol in
+the label colour. Eight monochrome glyphs in one column are found by reading
+the text next to them, not by looking — the icons carried no signal the title
+did not already carry.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Leave the symbols monochrome | No work; matches a plain SwiftUI `List` | The icon is decoration only; the row is found by reading |
+| Tint the symbol itself per pane | One line per case | Coloured glyphs on the sidebar's material read as thin and washed out, and go muddy on a selected row |
+| Coloured rounded tile behind a white glyph | The shape System Settings, Mail and Shortcuts all use; reads at a glance and holds up on a selected row | Slightly more view code; needs a colour per pane |
+
+### Decision
+
+The tile. `Pane.tint` gives each pane a colour and `PaneIcon` draws a 20×20
+`RoundedRectangle(cornerRadius: 5, style: .continuous)` filled with
+`tint.gradient`, the symbol over it in white at 11pt semibold. Colours echo
+what the pane controls rather than being arbitrary: green for Agents (a running
+light), sky blue for Weather, red for Music, purple for Appearance, orange for
+Modules, grey for General as in System Settings.
+
+Four symbols moved to their filled variants (`gearshape.fill`,
+`paintbrush.fill`, `cloud.sun.fill`, `square.grid.2x2.fill`) and About to bare
+`info` — an outline glyph on a filled tile reads as a hole in it.
+
+### Consequences
+
+Sidebar only; nothing else in the window changed, and the row heights are the
+ones AppKit already gave (the tile is 20pt, under the row's own height). Seen
+on screen: all eight tiles draw in their colour with the selected row's tile
+unchanged, which is the point of the white-on-colour shape.

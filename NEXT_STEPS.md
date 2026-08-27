@@ -7,6 +7,25 @@
 
 ## Current state
 
+- **The close artifact on a notched Mac is fixed (2026-08-27),
+  decision 082.** Decision 065 fixed the same-sounding "black fade out" on a
+  notchless display and closed with "notched-Mac behaviour unchanged by
+  construction" — which is exactly what left the built-in screen with a fade of
+  its own. Recorded and read frame by frame: the black silhouette retracted
+  correctly, but the expanded column (output chips, gear, CPU/memory readouts)
+  and the glass both stayed at **full panel size** and faded over the desktop
+  on the collapse spring, legible at t+0.16s through t+0.24s with no panel
+  behind them. A removed SwiftUI subtree keeps the size it held and does not
+  follow the frame inward. Content is now clipped to the retracting shape, and
+  the rim light moved outside that clip so the stroke is not halved by it.
+  Verified on screen before and after: the ghost ran t+0.04s to t+0.32s before,
+  and after it every frame of the close is content inside the outline with the
+  pill settling pure black. The open improved as a side effect — the column now
+  unrolls out of the notch instead of appearing at full width inside a growing
+  shape. Two curve changes were tried and reverted; `.animation(_:value:)` on
+  the silhouette also scopes the geometry arriving from the frame above, which
+  retracted the pill faster than the panel it backs.
+
 - **Twelve features from a boringNotch / Notchy teardown (2026-08-27),
   decisions 069–080.** Both competitors were read off their installed bundles
   — Info.plists, preference domains, and string catalogues (boringNotch ~250
@@ -624,6 +643,10 @@
   (c) accept it and document. Awaiting the user's call. -->
 
 ## Recently completed
+
+- **2026-08-27 — Coloured Settings sidebar icons (decision 083).**
+  `SettingsView.Pane.tint` plus a `PaneIcon` tile: each pane's glyph in white on
+  a rounded rect of its own colour, the System Settings shape. Sidebar only.
 
 - **2026-08-27 — The orphan reaper actually matches (decision 068).**
   `MediaRemoteService.reapOrphanedStreams()` compares the adapter path
