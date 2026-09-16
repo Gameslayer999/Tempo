@@ -644,6 +644,170 @@
 
 ## Recently completed
 
+- **2026-09-07 — The very top row of the display is inside the target now
+  (decision 096).** Reported as "a dead zone on the very top when touching the
+  edge of the monitor" on the external display. Every pointer-tested region is
+  a top-anchored `NSRect` whose `maxY` equals `screen.maxY`, and
+  `NSRect.contains` excludes `maxY` — which is exactly what
+  `NSEvent.mouseLocation.y` reports when the pointer is parked on the topmost
+  row. Verified by warping the cursor: Quartz y=0 gives 1440.00 (`contains` =
+  no), y=1 gives 1439.00 (yes). `hoverActivationRegion`,
+  `expandedPanelRegion` and `dragActivationRegion` now all build through
+  `NotchGeometry.topAnchoredRegion`, one point taller so the rect overshoots
+  above the screen edge into space the pointer cannot reach. Decision 095's
+  30pt row, the menu-bar gate and the dwell are unchanged.
+
+- **2026-09-04 — The target is the menu bar's row, not a 3pt band (decision
+  095).** Reported after 092 fixed the misfire: "sometimes when menu bar is down
+  it doesnt expand, or it flickers and then goes away." One cause — a 3pt band
+  has to *hold* the pointer for the whole dwell, and the hand relaxes a pixel or
+  two down into the bar it just revealed, cancelling the dwell or collapsing the
+  panel right after it opened. `hoverActivationRegion` now takes a height and
+  the detector passes `MenuBarSensor.barHeight`, measured from the sensor's own
+  status window (30pt) rather than `NSStatusBar.system.thickness` (22pt — the
+  8pt gap *is* the relax). The gate poll runs anywhere in the row now, not only
+  at the extreme edge. Safe because decision 091's gate does the filtering, not
+  the height.
+
+- **2026-09-04 — Slider values can be typed; Edge hold capped at 150ms
+  (decision 094).** Asked for directly: "I should be able to fine tune sliders
+  by entering the values manually... i doubt anyone would use anything over 150
+  ms." `SliderRow`'s value `Text` is now a `TextField` with a per-row `parse`
+  closure, so all seven sliders accept typed input — units optional, plus `2.5M`
+  for the token budget and `Never` for the paused-media timeout. Typed values
+  are clamped to the range but not snapped to the step (dragging steps; typing
+  reaches between). Clicking away commits like Return. `maxEdgeHoldDelayMS`
+  1500 → 150, step 50 → 10.
+
+- **2026-09-04 — The edge push gets its own hold setting (decision 093).**
+  Requested directly: "make sure that we are able to tweak things like how long
+  we need to hold the cursor on the menu bar in settings." `edgeHoldDelayMS`
+  (0–1500ms, step 50, default 60 — today's value, so no feel changes) is a
+  separate preference from the pill's `hoverExpandDelayMS` (0–400ms), because
+  the two gestures have opposite ideals. `handleHover` now takes the delay as a
+  parameter and the pointer-monitor path passes the new one. The slider lives
+  in Settings ▸ Displays ▸ Placement under "Show the strip on external
+  displays", disabled while that toggle is on. The hold runs *after* the menu
+  bar finishes dropping (decision 091); the footer says so.
+
+- **2026-09-04 — `.onHover` fires where `hitTest` says nothing is there
+  (decision 092).** The actual cause of the misfire decisions 090 and 091 both
+  failed to fix. Instrumenting the running app and reproducing showed
+  `atEdge=true` **zero** times across 3798 samples: the band was never entered
+  and the menu-bar gate never consulted, while every misfire started with
+  SwiftUI's `.onHover` on the collapsed pill (~308x32pt at the top of the
+  screen) and the pointer monitor only reported *afterwards*, on the panel that
+  had already opened. Decision 055 assumed `.onHover` could not fire where
+  `hitTest` returns nil; tracking areas ignore hit-testing, so both paths were
+  live and the unrestricted one won. `.onHover` is now ignored while
+  `stripHidden`, leaving `NotchHoverDetector` in sole charge of that mode.
+  Confirmed working on the monitor; the `TEMPO_DEBUG_HOVER=1` scaffolding it
+  was diagnosed with has been removed again.
+
+- **2026-09-04 — The notch opens only once the menu bar is down (decision
+  091).** Reported as "when I try to select a tab in a browser like google
+  chrome near the middle of the screen, I keep accidentally triggering tempo" —
+  a full-screen tab strip runs to the top edge, so it shares the 3pt band
+  decision 090 left. There is no API for "the menu bar is down":
+  `NSMenu.menuBarVisible()` answers a different question and
+  `NSScreen.visibleFrame` reserved the same 30pt in both states (both measured).
+  A status item's window does track it exactly — hidden `y = 1440`, fully down
+  `y = 1410` on a 1440pt screen — so `MenuBarSensor` owns a zero-length status
+  item, created only while `NotchHoverDetector` runs, and the hover gate now
+  requires the bar fully down. Opening only: the expanded panel's region stays
+  ungated, since moving into the controls retracts the bar. A 0.1s timer
+  re-checks the gate while the pointer is in the band, because a pointer held
+  against the edge sends no further events. Builds; needs a check on the
+  external monitor.
+
+- **2026-09-04 — The invisible notch opens at the screen edge, not near it
+  (decision 090).** With the strip hidden on an external display, the
+  pointer-watched hover target was the full invisible pill — `pillWidth` wide
+  and 32pt tall — so the panel dropped open whenever the pointer crossed the top
+  of the screen on its way to a title bar or a tab.
+  `NotchGeometry.hoverActivationRegion` is now a 200 x 3pt band flush with
+  `screen.maxY` (`hiddenStripActivationHeight`), so Tempo appears on the same
+  gesture that reveals a hidden menu bar. Only `NotchHoverDetector` reads that
+  region, and only in that one mode, so the drawn strip's `.onHover` and the
+  expanded panel's region are untouched. Builds; needs a check on the external
+  monitor.
+
+- **2026-08-27 — The pointer becomes a hand over a control (decision 089).**
+  The panel's controls draw no chrome at rest, so the hover highlight was the
+  only "this is clickable" cue and it only arrives once you are already on the
+  control. A `pointingHandCursor()` modifier in `NotchStyle.swift` uses macOS
+  15's `pointerStyle(.link)` where it exists — the system owns the cursor's
+  lifetime, so a control that disappears under the pointer (the shelf's x, the
+  whole panel on collapse) cannot strand a hand on the desktop — and falls back
+  to `NSCursor` push/pop with an unwind on `onDisappear` for macOS 14. Applied
+  inside `NotchButtonStyle` (transport, gear, Connect Spotify, add-to-playlist,
+  agent rows) and individually to the controls no style can reach: the shelf's
+  remove button, mute, the device chips, the playlist `Menu`, and onboarding's
+  two custom button styles. Excluded on purpose: Settings' standard AppKit
+  controls (on macOS the arrow over a real button is the convention; the hand
+  means link) and onboarding's "hello" skip target (deliberately has no visible
+  affordance). Shipped in the running bundle; needs a hover check on screen.
+
+- **2026-08-27 — The shelf's remove button no longer flickers (decision 088).**
+  Reported as "really difficult to delete something from the file shelf: the x
+  flickers a lot when hovering over." The 24pt button was pushed outside its
+  52pt chip with `.offset(x: 8, y: -8)` while `.onHover` was tracked on the chip
+  alone, and the button was mounted only while hovered — so reaching for it left
+  the hover region, unmounted the button, restored hover, and remounted it, over
+  and over; a click landing mid-cycle hit the chip's `.onDrag` and dragged the
+  file out instead of removing it. The button now sits inside the chip's bounds,
+  stays mounted, and fades with `.opacity`/`.allowsHitTesting` on a 0.12s
+  ease-out, so the hover region and the hit target are the same rect. The exit
+  handler also clears only its own id, so moving between adjacent chips can't
+  leave the row unhovered. Row spacing, chip size and the 24pt target unchanged.
+  **Not yet seen on screen** — builds clean; needs a hover-and-click check.
+
+- **2026-08-27 — The session title is read from the end of the transcript (decision 087).**
+  Clicking the light for the session in `~` fronted the Ghostty app instead of
+  its window. Cause: `claudeSessionTitle` skipped any transcript over 16MB, and
+  that session's is 22,788,432 bytes — so the title match never ran even though
+  Claude's title (`LHR 400 class alternatives`) matched its surface exactly, and
+  decision 085's directory fallback missed too because the session's status file
+  records `cwd` as the transcript's project directory rather than
+  `~` (AgentStatus's data, read-only to Tempo). The cap is
+  replaced by a backward line scan over the memory-mapped file that stops at the
+  last `ai-title` record: verified with the shipped code against the real file,
+  the title comes back in under 1ms from 19KB in. Also measured while chasing
+  this, and left alone: Ghostty's `focus` does cross Spaces (active space 3 →
+  263 with no Ghostty window on the starting Space), and it is a no-op only when
+  Ghostty is already the frontmost app with all its windows elsewhere.
+
+- **2026-08-27 — The sneak peek gets a rim light (decision 086).**
+  Liquid Glass draws its own rim from what is behind the window, so the peek's
+  edge thinned to nothing over bright wallpapers. A 1.5pt white 0.28
+  `strokeBorder` is now the topmost layer over the glass, and replaces the
+  old 0.10/1pt hairline on the Reduce-Transparency / Solid / macOS 14-15
+  fallback plate. Nothing else about the peek changed.
+
+- **2026-08-27 — A Ghostty session with no title yet is found by its folder (decision 085).**
+  Clicking a light for a session Claude had not titled yet fell straight
+  through to fronting the Ghostty app, landing on whichever window was last
+  used — a different session on a different Space. `SessionFocusService` now
+  runs a second match after the title match fails: Ghostty's per-surface
+  `working directory` against the session's `cwd`, with surfaces claimed by
+  another live session's `ai-title` struck out, acted on only when a single
+  surface survives. `focus(_:among:)` takes the session list for that
+  elimination. Verified live against three sessions in three Spaces: the
+  untitled case resolved to exactly the right surface and focused it, and the
+  two-untitled-sessions-in-one-folder case declined and left the old fallback
+  in place. Also measured and left alone: Ghostty's `focus` does cross Spaces
+  and activate the app, its app-level `terminals` list is complete regardless
+  of Space, and tab order never enters the match.
+
+- **2026-08-27 — The sneak peek wears Liquid Glass (decision 084).**
+  `ContentView.peekBackground`: `glassEffect(.regular)` in a 20pt continuous
+  rounded rect, replacing the black 0.82 plate and its white hairline, so the
+  track-change peek reads as one of the system HUDs it appears beside. Neutral
+  and independent of `panelStyle`. Plate fallback kept for macOS 14/15, Reduce
+  Transparency and the Solid style; Increase Contrast adds a 0.25 scrim.
+  Verified on screen over a dark terminal and a light-chrome window by driving
+  a real Spotify track change at zero volume and restoring the player after.
+
 - **2026-08-27 — Coloured Settings sidebar icons (decision 083).**
   `SettingsView.Pane.tint` plus a `PaneIcon` tile: each pane's glyph in white on
   a rounded rect of its own colour, the System Settings shape. Sidebar only.

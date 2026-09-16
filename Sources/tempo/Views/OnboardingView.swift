@@ -127,6 +127,7 @@ struct OnboardingView: View {
             HStack {
                 Button("Open Settings") { openSettings() }
                     .buttonStyle(.plain)
+                    .pointingHandCursor()
                     .font(NotchType.subtitle)
                     .foregroundStyle(.secondary)
                     // The secondary escape route was a 11pt text run with no
@@ -331,6 +332,7 @@ private struct SetupActionButtonStyle: ButtonStyle {
             )
             .contentShape(Capsule())
             .onHover { hovering = $0 }
+            .pointingHandCursor()
     }
 }
 
@@ -352,5 +354,6 @@ private struct GetStartedButtonStyle: ButtonStyle {
             )
             .contentShape(Capsule())
             .onHover { hovering = $0 }
+            .pointingHandCursor()
     }
 }

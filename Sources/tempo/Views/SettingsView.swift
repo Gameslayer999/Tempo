@@ -132,19 +132,69 @@ private struct SliderRow: View {
     let step: Double
     /// The value as the user should read it — already carries its unit.
     let valueText: String
+    /// Turns what the user typed back into a value (decision 094). Handed the
+    /// field's text verbatim, unit and all, because only the row knows what
+    /// its own units mean — `%` of what, `M` of what, or the word "Never".
+    /// Returning nil rejects the edit and the field reverts.
+    let parse: (String) -> Double?
+
+    /// Non-nil only while the field is being edited: what the user is typing,
+    /// which must not be reformatted under them between keystrokes.
+    @State private var draft: String?
+    @FocusState private var editing: Bool
 
     var body: some View {
         LabeledContent(title) {
             HStack(spacing: 10) {
                 Slider(value: $value, in: range, step: step)
                     .frame(width: 170)
-                Text(valueText)
-                    .font(.callout.monospacedDigit())
-                    .foregroundColor(.secondary)
-                    .frame(width: 52, alignment: .trailing)
+                TextField("", text: Binding(
+                    get: { draft ?? valueText },
+                    set: { draft = $0 }
+                ))
+                .focused($editing)
+                .onSubmit { commit() }
+                // Clicking away is as much a commit as pressing Return; the
+                // alternative is a typed value that silently evaporates.
+                .onChange(of: editing) { _, isEditing in
+                    if !isEditing { commit() }
+                }
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .font(.callout.monospacedDigit())
+                .frame(width: 74)
             }
         }
     }
+
+    /// Clamped to the row's range, and deliberately *not* snapped to `step`:
+    /// dragging is what steps, and typing exists precisely to reach the values
+    /// in between (decision 094).
+    private func commit() {
+        defer { draft = nil }
+        guard let draft, let typed = parse(draft) else { return }
+        value = min(max(typed, range.lowerBound), range.upperBound)
+    }
+}
+
+/// The number in a slider field, ignoring any unit left in place: "150",
+/// "150 ms" and "150ms" all read as 150. A decimal comma is accepted for the
+/// locales that type one.
+private func sliderNumber(_ text: String) -> Double? {
+    let digits = text
+        .filter { $0.isNumber || $0 == "." || $0 == "," || $0 == "-" }
+        .replacingOccurrences(of: ",", with: ".")
+    return Double(digits)
+}
+
+/// The same, for the token budget, whose own display is abbreviated: "2.5M"
+/// and "500K" mean what they say, and a bare number is taken as tokens.
+private func sliderTokens(_ text: String) -> Double? {
+    guard let number = sliderNumber(text) else { return nil }
+    let lowered = text.lowercased()
+    if lowered.contains("m") { return number * 1_000_000 }
+    if lowered.contains("k") { return number * 1_000 }
+    return number
 }
 
 /// The caption every `footer:` in this window is drawn in.
@@ -201,7 +251,8 @@ private struct GeneralPane: View {
                     value: $prefs.hoverExpandDelayMS,
                     range: Preferences.minHoverExpandDelayMS...Preferences.maxHoverExpandDelayMS,
                     step: 10,
-                    valueText: "\(Int(prefs.hoverExpandDelayMS)) ms"
+                    valueText: "\(Int(prefs.hoverExpandDelayMS)) ms",
+                    parse: sliderNumber
                 )
             } header: {
                 Text("Interaction")
@@ -276,7 +327,9 @@ private struct AppearancePane: View {
                     value: $prefs.albumGlowStrength,
                     range: 0...1,
                     step: 0.05,
-                    valueText: "\(Int((prefs.albumGlowStrength * 100).rounded()))%"
+                    valueText: "\(Int((prefs.albumGlowStrength * 100).rounded()))%",
+                    // Shown as a percentage, stored as a 0…1 fraction.
+                    parse: { sliderNumber($0).map { $0 / 100 } }
                 )
                 .disabled(!prefs.albumGlow)
                 Toggle("Blurred cover behind the artwork", isOn: $prefs.albumArtBlur)
@@ -401,10 +454,20 @@ private struct DisplaysPane: View {
                     }
                 }
                 Toggle("Show the strip on external displays", isOn: $prefs.showStripOnExternalDisplays)
+
+                SliderRow(
+                    title: "Edge hold",
+                    value: $prefs.edgeHoldDelayMS,
+                    range: Preferences.minEdgeHoldDelayMS...Preferences.maxEdgeHoldDelayMS,
+                    step: 10,
+                    valueText: "\(Int(prefs.edgeHoldDelayMS)) ms",
+                    parse: sliderNumber
+                )
+                .disabled(prefs.showStripOnExternalDisplays)
             } header: {
                 Text("Placement")
             } footer: {
-                FooterText("Automatic hugs the built-in notched display whenever it is attached, and falls back to whichever display carries the menu bar — with the lid closed, or on a Mac with no notch at all. Pinning overrides that order and keeps Tempo on the display you chose. The choice is stored as the display's UUID, not its ID, because macOS reassigns display IDs across reconnects; a pinned display that is currently unplugged is remembered, and Tempo falls back to the automatic order until it returns.\n\n“Show the strip on external displays” governs that notchless fallback. Off hides the strip: the panel still opens when you move the pointer to the top middle of the display, it just isn't drawn until then, and clicks there go straight through to whatever is behind it.")
+                FooterText("Automatic hugs the built-in notched display whenever it is attached, and falls back to whichever display carries the menu bar — with the lid closed, or on a Mac with no notch at all. Pinning overrides that order and keeps Tempo on the display you chose. The choice is stored as the display's UUID, not its ID, because macOS reassigns display IDs across reconnects; a pinned display that is currently unplugged is remembered, and Tempo falls back to the automatic order until it returns.\n\n“Show the strip on external displays” governs that notchless fallback. Off hides the strip: nothing is drawn, and clicks at the top of the screen go straight through to whatever is behind it. To open Tempo there, push the pointer into the very top edge until the menu bar drops — it opens only once that bar is down, so reaching for a full-screen browser's tabs at the same edge leaves it shut.\n\n**Edge hold** is how long the pointer must stay there *after* the menu bar has finished dropping. Longer makes the gesture more deliberate; 0 opens as soon as the bar lands. It applies only while the strip is hidden.")
             }
 
             Section {
@@ -492,7 +555,8 @@ private struct MusicPane: View {
                     value: $prefs.sneakPeekSeconds,
                     range: Preferences.minSneakPeekSeconds...Preferences.maxSneakPeekSeconds,
                     step: 0.5,
-                    valueText: String(format: "%.1f s", prefs.sneakPeekSeconds)
+                    valueText: String(format: "%.1f s", prefs.sneakPeekSeconds),
+                    parse: sliderNumber
                 )
                 .disabled(!prefs.sneakPeek)
                 SliderRow(
@@ -500,7 +564,10 @@ private struct MusicPane: View {
                     value: $prefs.mediaIdleSeconds,
                     range: Preferences.minMediaIdleSeconds...Preferences.maxMediaIdleSeconds,
                     step: 10,
-                    valueText: prefs.mediaIdleSeconds > 0 ? "\(Int(prefs.mediaIdleSeconds)) s" : "Never"
+                    valueText: prefs.mediaIdleSeconds > 0 ? "\(Int(prefs.mediaIdleSeconds)) s" : "Never",
+                    // "Never" is this row's own word for 0, so typing it back
+                    // has to mean the same thing.
+                    parse: { $0.lowercased().hasPrefix("n") ? 0 : sliderNumber($0) }
                 )
             } header: {
                 Text("Playback")
@@ -950,7 +1017,8 @@ private struct AgentsPane: View {
                     value: $prefs.rateLimitWindowTokens,
                     range: Preferences.minRateLimitWindowTokens...Preferences.maxRateLimitWindowTokens,
                     step: 250_000,
-                    valueText: UsageHistoryService.shortTokens(Int(prefs.rateLimitWindowTokens))
+                    valueText: UsageHistoryService.shortTokens(Int(prefs.rateLimitWindowTokens)),
+                    parse: sliderTokens
                 )
                 .disabled(!prefs.showRateLimitPace)
                 Text(calibrationHint)
@@ -961,7 +1029,8 @@ private struct AgentsPane: View {
                     value: $prefs.rateLimitWarnPercent,
                     range: Preferences.minRateLimitWarnPercent...Preferences.maxRateLimitWarnPercent,
                     step: 1,
-                    valueText: "\(Int(prefs.rateLimitWarnPercent))%"
+                    valueText: "\(Int(prefs.rateLimitWarnPercent))%",
+                    parse: sliderNumber
                 )
                 .disabled(!prefs.showRateLimitPace)
             } header: {

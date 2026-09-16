@@ -38,9 +38,12 @@ wider than its content:
   nothing at all when no sessions are running.
 - a **sneak peek** when the track changes — the title and artist flash below
   the notch for a few seconds and retract, so you find out what just started
-  without moving the pointer or opening anything. It is drawn over whatever is
-  behind it and takes no clicks. Length is adjustable, and it stays out of the
-  way while the panel is already open.
+  without moving the pointer or opening anything. It is a Liquid Glass capsule
+  on macOS 26, the same material the system's own AirPods and volume HUDs wear
+  (an opaque plate on macOS 14/15, with Reduce Transparency on, or with the
+  panel style set to Solid). It is drawn over whatever is behind it and takes
+  no clicks. Length is adjustable, and it stays out of the way while the panel
+  is already open.
 
 When nothing has actually played for a minute — paused and forgotten, or no
 player running at all — the media UI switches off: the cover, the visualizer and the
@@ -85,8 +88,9 @@ column:
 - **file shelf** — drag any file toward the notch and the panel opens as a drop
   target before you get there; let go and Tempo keeps a copy. Hover the notch
   later and the shelf shows what it is holding: drag an item back out to any
-  app, or right-click to reveal it in Finder or remove it. The copy means the
-  shelf still works after you move or delete the original
+  app, hover an item and click the x in its corner to remove it, or right-click
+  to reveal it in Finder. The copy means the shelf still works after you move or
+  delete the original
 - **add the current song to a Spotify playlist** — full width, under the
   scrubber. The picker lists only
   playlists you can actually add to (your own, plus collaborative ones), or just
@@ -135,9 +139,10 @@ column:
   inventing one. Switch the figures off in Settings ▸ Modules and Tempo stops
   reading the transcripts entirely.
   **Click a row to go to that session**: a terminal session raises the tab it is running in (Terminal.app
-  matched by tty, Ghostty by session title), a VS Code or Cursor session raises
-  the window that has its folder open, and a Claude Desktop session brings
-  Claude forward. The panel collapses on the way out. Raising a window that is
+  matched by tty, Ghostty by session title — or, for a session Claude has not
+  titled yet, by the tab's working directory), a VS Code or Cursor session
+  raises the window that has its folder open, and a Claude Desktop session
+  brings Claude forward. The panel collapses on the way out. Raising a window that is
   on another Space or full-screen relies on the Accessibility permission — grant
   Tempo *System Settings ▸ Privacy & Security ▸ Accessibility* for the fastest,
   most reliable jump; without it editors are still reached through their CLI and
@@ -260,6 +265,12 @@ Agents — so a pane is found by colour before it is read.
   *Visualizer colour* is white (the default), the accent colour, the current
   cover's colour, or a spectrum — a hue per frequency band, warm in the centre
   where the bass sits, cooling outward.
+- **Every slider in Settings can also be typed into.** Click its value, enter a
+  number, press Return — the units are optional (`150`, `150 ms` and `150ms` all
+  work, as do `2.5M` for the token budget and `Never` for the paused-media
+  timeout). A typed value is kept exactly as entered rather than snapped to the
+  slider's step, which is the point: dragging steps, typing reaches what lies
+  between.
 - **Displays** — *Preferred display* pins the strip to one screen; left on
   automatic, Tempo hugs the built-in notch whenever that display is available.
   A pinned display that isn't currently attached falls back to automatic rather
@@ -267,9 +278,17 @@ Agents — so a pane is found by colour before it is read.
   governs what Tempo draws when there is no hardware notch to hug: with the lid
   closed, or on a Mac with no built-in notch, it normally falls back to a small
   strip at the top of whichever display carries the menu bar. Switch this off
-  and that strip isn't drawn — but Tempo is still there: move the pointer to
-  the top middle of the display and the panel opens as usual, with the same
-  hover delay and the same tick. While it is closed it is invisible *and*
+  and that strip isn't drawn — but Tempo is still there: push the pointer into
+  the very top edge of the display, in the middle, the same way you drop a
+  hidden menu bar, and the panel opens with the same hover delay and the same
+  tick. The target is the middle of the menu bar's own row, and where that bar
+  auto-hides Tempo waits until it is actually down — so reaching for a tab in a
+  full-screen browser, which runs to the same top edge, doesn't open it. In that mode only, Tempo keeps a zero-width item in the menu bar: it
+  draws nothing and exists purely to sense whether the bar is down. **Edge
+  hold** sets how long the pointer must stay at the edge after the menu bar has
+  dropped — 0 opens the moment it lands, up to 150 ms for a deliberate hold. It
+  applies only while the strip is hidden, so it's disabled when the toggle
+  above it is on. While it is closed it is invisible *and*
   click-through, so the menu bar underneath behaves exactly as if Tempo weren't
   running.
 
@@ -364,6 +383,12 @@ and none of them need anything switched on inside Tempo.
   differ in fill, size and glyph as well as hue; the current audio output chip
   is outlined, not just tinted.
 
+The pointer turns into a hand over anything clickable in Tempo's own surfaces
+— the transport buttons, the gear, the output chips, the playlist picker, the
+shelf's remove button, the agent rows — because those controls draw no button
+chrome until you are already on them. The Settings window keeps the system's
+arrow, since those are standard macOS controls.
+
 Text throughout uses the system's named text styles, so it tracks your text
 size setting rather than being pinned to fixed point sizes. Controls, tooltips
 and VoiceOver labels are present on the transport buttons, the scrubber (which
@@ -378,7 +403,9 @@ chips, the shelf items and every agent row.
     the notch when you open it — plugging, unplugging, and rearranging displays are
     all followed automatically, no restart. If you would rather not see the strip on
     the external display, switch off Settings ▸ General ▸ *Show the strip on
-    external displays* — the panel still opens when you point at the top middle.
+    external displays* — the panel still opens when you push the pointer into the
+    very top edge of the screen, in the middle, far enough that the menu bar drops
+    with it.
 - Swift toolchain (Command Line Tools are enough — the project builds with SwiftPM,
   no Xcode project)
 - **Spotify desktop app** — only for add-to-playlist. Now-playing and transport

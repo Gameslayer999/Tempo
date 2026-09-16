@@ -31,17 +31,22 @@ enum SessionFocusService {
     /// Focus the host of `session`. Returns immediately — every step below
     /// shells out (`ps`, `osascript`, the VS Code CLI) and costs 0.2–1.1s, which
     /// on the main actor would freeze the panel mid-collapse.
-    static func focus(_ session: AgentSession) {
+    ///
+    /// `sessions` is every session the panel is showing. A CLI session Claude
+    /// has not titled yet is found by elimination against the *other* sessions'
+    /// titles (decision 085), which needs to know who they are.
+    static func focus(_ session: AgentSession, among sessions: [AgentSession]) {
         let (ide, cwd, pid, id) = (session.ide, session.cwd, session.pid, session.id)
+        let siblings = sessions.map(\.id).filter { $0 != id }
         Task.detached(priority: .userInitiated) {
-            route(ide: ide, cwd: cwd, pid: pid, sessionID: id)
+            route(ide: ide, cwd: cwd, pid: pid, sessionID: id, siblings: siblings)
         }
     }
 
-    private static func route(ide: String, cwd: String, pid: Int, sessionID: String) {
+    private static func route(ide: String, cwd: String, pid: Int, sessionID: String, siblings: [String]) {
         switch ide {
         case "cli":
-            focusCLISession(pid: pid, sessionID: sessionID)
+            focusCLISession(pid: pid, sessionID: sessionID, cwd: cwd, siblings: siblings)
         case "claude-desktop":
             // Claude Desktop scripts no conversation selection, so this is
             // app-level focus by necessity.
@@ -64,19 +69,27 @@ enum SessionFocusService {
     /// A CLI session owns no window; it is reached through the terminal running
     /// it. A session with no controlling terminal is a detached background
     /// agent — the one case where there may be nothing on screen to go to.
-    private static func focusCLISession(pid: Int, sessionID: String) {
+    private static func focusCLISession(pid: Int, sessionID: String, cwd: String, siblings: [String]) {
         guard pid > 0 else { return }
 
         guard let tty = tty(of: pid) else {
             // Background agent: focus the Ghostty surface it is already attached
-            // in, if one exists. Nothing is opened if it isn't.
+            // in, if one exists. Nothing is opened if it isn't — and nothing is
+            // guessed either, so the directory match below is deliberately not
+            // run here: a detached agent has no surface of its own to land in.
             _ = focusGhosttySurface(sessionID: sessionID, requireUnique: false)
             return
         }
         guard let terminal = terminalApp(of: pid) else { return }
 
         if terminal.name == "Terminal", focusTerminalTab(tty: tty) { return }
-        if terminal.name == "Ghostty", focusGhosttySurface(sessionID: sessionID, requireUnique: true) { return }
+        if terminal.name == "Ghostty" {
+            if focusGhosttySurface(sessionID: sessionID, requireUnique: true) { return }
+            // Untitled or ambiguous: find the surface by its working directory
+            // rather than fronting the app and landing on the wrong session
+            // (decision 085).
+            if focusGhosttySurfaceByDirectory(cwd: cwd, siblings: siblings) { return }
+        }
 
         // Another emulator, or a tab we could not match: land in the right app —
         // and in the right *instance* of it, which `open -a <name>` cannot
@@ -151,6 +164,78 @@ enum SessionFocusService {
         return osascript(script, [title, requireUnique ? "1" : "0"]) == "ok"
     }
 
+    /// The second grade of Ghostty match, for the sessions a title cannot
+    /// reach: one Claude Code has not titled yet — `ai-title` arrives only
+    /// after the first turn, so a session is untitled for exactly as long as it
+    /// is new — or one whose title matched nothing unambiguously. Both used to
+    /// fall straight through to fronting the Ghostty *app*, which lands on
+    /// whichever window was last used; with each window on its own Space that
+    /// is a jump to a different session on a different Space, which is what the
+    /// wrong-session bug looked like (decision 085).
+    ///
+    /// Ghostty publishes a `working directory` per surface — OSC 7, so it is
+    /// the shell's real cwd — and the session's status file carries the same
+    /// path, which narrows the surfaces to the ones sitting in this session's
+    /// folder. Any of those already claimed by *another* live session's title
+    /// is struck out: a surface showing a different session is not this one.
+    /// Only a single survivor is acted on, keeping the rule the title match
+    /// uses — a wrong tab is worse than no tab (UI Principle #4).
+    ///
+    /// A Ghostty running exactly one surface is that surface by construction:
+    /// the caller has already walked this session's process tree to this
+    /// Ghostty instance.
+    ///
+    /// Paths are compared with AppleScript's default text comparison, which
+    /// ignores case — OSC 7 reports the cwd as the shell spells it, and on a
+    /// case-insensitive volume that need not match the status file's casing
+    /// (observed here: `…/documents/code/tempo` against `…/Documents/code/Tempo`).
+    private static func focusGhosttySurfaceByDirectory(cwd: String, siblings: [String]) -> Bool {
+        guard !cwd.isEmpty else { return false }
+        let claimed = siblings.compactMap { claudeSessionTitle(sessionID: $0) }
+        let script = """
+        on run argv
+          set wantDir to item 1 of argv
+          set claimedTitles to {}
+          if (count of argv) > 1 then set claimedTitles to items 2 thru -1 of argv
+          tell application "Ghostty"
+            set surfaces to terminals
+            if (count of surfaces) is 1 then
+              focus (item 1 of surfaces)
+              return "ok"
+            end if
+            set hits to {}
+            repeat with t in surfaces
+              set n to (name of t)
+              set taken to false
+              repeat with c in claimedTitles
+                if n ends with (contents of c) then set taken to true
+              end repeat
+              if not taken then
+                set d to ""
+                try
+                  set d to (working directory of t)
+                end try
+                if my sameFolder(d, wantDir) then set end of hits to t
+              end if
+            end repeat
+            if (count of hits) is 1 then
+              focus (item 1 of hits)
+              return "ok"
+            end if
+          end tell
+          return "no"
+        end run
+
+        on sameFolder(a, b)
+          if a is "" or b is "" then return false
+          if (count of a) > 1 and a ends with "/" then set a to text 1 thru -2 of a
+          if (count of b) > 1 and b ends with "/" then set b to text 1 thru -2 of b
+          return a is b
+        end sameFolder
+        """
+        return osascript(script, [cwd] + claimed) == "ok"
+    }
+
     /// Claude Code's own title for a session, from the `ai-title` records in its
     /// transcript — the last one written is the current title. The only handle
     /// that tells two Ghostty surfaces apart.
@@ -177,24 +262,29 @@ enum SessionFocusService {
         guard let path = dirs.map({ $0.appendingPathComponent(file) }).first(where: { fm.fileExists(atPath: $0.path) }) else {
             return nil
         }
-        // Transcripts reach a few MB; anything past this is skipped rather than
-        // read on the click path.
-        let size = ((try? fm.attributesOfItem(atPath: path.path))?[.size] as? NSNumber)?.intValue ?? 0
-        guard size <= 16 * 1024 * 1024 else { return nil }
-        guard let text = try? String(contentsOf: path, encoding: .utf8) else { return nil }
-
-        var title: String?
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+        // The current title is the *last* `ai-title` record, so the transcript is
+        // read backwards a line at a time and stops at the first one. Mapped
+        // rather than loaded: a long session's transcript runs to tens of MB
+        // (22MB for one live session here) while the record that ends this scan
+        // sat 19KB from the end. The 16MB cap this replaces skipped those files
+        // whole, which left exactly the longest-running sessions unreachable by
+        // title (decision 087).
+        guard let data = try? Data(contentsOf: path, options: .mappedIfSafe) else { return nil }
+        let marker = Data("\"ai-title\"".utf8)
+        var end = data.count
+        while end > 0 {
+            let start = data[..<end].lastIndex(of: 0x0A).map { $0 + 1 } ?? 0
+            let line = data[start..<end]
             // Cheap reject first: only the handful of title records are worth parsing.
-            guard line.contains("\"ai-title\"") else { continue }
-            guard let data = line.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  object["type"] as? String == "ai-title",
-                  let value = object["aiTitle"] as? String, !value.isEmpty
-            else { continue }
-            title = value
+            if line.range(of: marker) != nil,
+               let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+               object["type"] as? String == "ai-title",
+               let value = object["aiTitle"] as? String, !value.isEmpty {
+                return value
+            }
+            end = start == 0 ? 0 : start - 1
         }
-        return title
+        return nil
     }
 
     // MARK: Editor sessions

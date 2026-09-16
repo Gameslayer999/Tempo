@@ -68,7 +68,8 @@ struct ShelfView: View {
     }
 
     private func itemChip(_ item: ShelfItem) -> some View {
-        VStack(spacing: 3) {
+        let isHovered = hoveredID == item.id
+        return VStack(spacing: 3) {
             Image(systemName: item.symbolName)
                 .font(.title3)
                 .foregroundStyle(.primary)
@@ -84,7 +85,7 @@ struct ShelfView: View {
         .frame(width: Self.itemSide, height: Self.itemSide)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(hoveredID == item.id ? 0.16 : 0.08))
+                .fill(Color.primary.opacity(isHovered ? 0.16 : 0.08))
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(item.name)
@@ -92,28 +93,45 @@ struct ShelfView: View {
         // Dragging the chip hands the *stored copy* to the receiving app, so
         // the shelf keeps working after the original is moved or deleted.
         .onDrag { shelf.itemProvider(for: item) }
-        .onHover { hoveredID = $0 ? item.id : nil }
         .overlay(alignment: .topTrailing) {
-            if hoveredID == item.id {
-                Button {
-                    shelf.remove(item)
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(NotchType.control)
-                        .foregroundStyle(.secondary)
-                        // The glyph is 12pt; the target it sits in is not.
-                        // A 12pt close button on a 52pt chip is a dart throw,
-                        // and missing it drags the file out instead.
-                        .frame(width: NotchMetrics.compactHitTarget,
-                               height: NotchMetrics.compactHitTarget)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Remove \(item.name) from the shelf")
-                .help("Remove from shelf")
-                .offset(x: 8, y: -8)
+            Button {
+                shelf.remove(item)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(NotchType.control)
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(Color.primary.opacity(0.85), Color.primary.opacity(0.25))
+                    // The glyph is 12pt; the target it sits in is not.
+                    // A 12pt close button on a 52pt chip is a dart throw,
+                    // and missing it drags the file out instead.
+                    .frame(width: NotchMetrics.compactHitTarget,
+                           height: NotchMetrics.compactHitTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .accessibilityLabel("Remove \(item.name) from the shelf")
+            .help("Remove from shelf")
+            // The button stays *inside* the chip. Offsetting it out of the
+            // chip put most of its hit area outside the region `.onHover`
+            // tracks, so reaching for it ended hover, which removed the
+            // button, which restored hover — a flicker loop at pointer speed.
+            // Kept mounted and faded instead, so hit-testing never churns.
+            .opacity(isHovered ? 1 : 0)
+            .allowsHitTesting(isHovered)
+        }
+        // Hover is tracked on the whole chip *including* the button overlay.
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onHover { hovering in
+            if hovering {
+                hoveredID = item.id
+            } else if hoveredID == item.id {
+                // Only clear our own id: leaving one chip for its neighbour
+                // can deliver this after the neighbour's enter.
+                hoveredID = nil
             }
         }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .contextMenu {
             Button("Reveal in Finder") { shelf.revealInFinder(item) }
             Button("Remove") { shelf.remove(item) }

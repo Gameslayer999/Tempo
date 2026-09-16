@@ -38,6 +38,7 @@ struct AudioOutputView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .pointingHandCursor()
             .foregroundStyle(.secondary)
             .accessibilityLabel(audio.isMuted ? "Unmute" : "Mute")
             .help(audio.isMuted ? "Unmute" : "Mute")
@@ -129,6 +130,7 @@ struct AudioOutputView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .foregroundStyle(isCurrent ? .primary : .secondary)
         .accessibilityLabel(device.name)
         .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)

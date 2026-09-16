@@ -151,6 +151,14 @@ struct ContentView: View {
         UInt64(max(prefs.hoverExpandDelayMS, 0) * 1_000_000)
     }
 
+    /// The same dwell for the undrawn strip's edge push, which is its own
+    /// setting (decision 093): holding a pointer against a screen edge is a
+    /// deliberate gesture and wants a separately tuned hold from brushing a
+    /// drawn pill.
+    private var edgeHoldDelay: UInt64 {
+        UInt64(max(prefs.edgeHoldDelayMS, 0) * 1_000_000)
+    }
+
     @State private var hoverTask: Task<Void, Never>?
 
     /// Pairs the collapsed pill's artwork square with the expanded panel's
@@ -337,7 +345,21 @@ struct ContentView: View {
         // else in the hierarchy spans the window (the outer `.frame` below
         // only positions — a frame claims no clicks of its own).
         .contentShape(shape)
-        .onHover(perform: handleHover)
+        .onHover { hovering in
+            // Ignored in exactly one mode, and this is the whole fix for the
+            // panel opening at a full-screen browser's tab strip (decision
+            // 092). Decision 055 assumed this callback could not fire when the
+            // strip is undrawn, because `NotchHostingView.hitTest` returns nil
+            // there. It fires anyway: `.onHover` is driven by an
+            // `NSTrackingArea`, and tracking areas deliver mouseEntered /
+            // mouseExited whether or not hit-testing accepts the point. So
+            // both entry paths were live, and this one — the collapsed pill's
+            // whole ~308x32pt rect, with no edge band and no menu-bar gate —
+            // was the one actually opening the panel. In this mode
+            // `NotchHoverDetector` owns hover entirely, opening *and* closing.
+            guard !stripHidden else { return }
+            handleHover(hovering)
+        }
         .onTapGesture {
             // Backstop for the pin-on-click behaviour; the primary path is
             // `NotchPanel.sendEvent`, which also catches clicks that a Button
@@ -413,7 +435,9 @@ struct ContentView: View {
         // a real hover, so the two entry paths cannot feel different — and the
         // detector is only ever running in that one mode, so this is inert
         // everywhere else.
-        .onChange(of: state.isPointerNearNotch) { _, near in handleHover(near) }
+        .onChange(of: state.isPointerNearNotch) { _, near in
+            handleHover(near, expandDelay: edgeHoldDelay)
+        }
     }
 
     /// Alpha of the black silhouette. `stripHidden` too, not just
@@ -616,10 +640,10 @@ struct ContentView: View {
     /// only on a true collapsed → expanded transition) does the trackpad tick.
     /// Hover-out arms a cancellable collapse. Either edge cancels whatever the
     /// other one had pending.
-    private func handleHover(_ hovering: Bool) {
+    private func handleHover(_ hovering: Bool, expandDelay: UInt64? = nil) {
         hoverTask?.cancel()
         hoverTask = Task {
-            try? await Task.sleep(nanoseconds: hovering ? hoverExpandDelay : Self.hoverCollapseDelay)
+            try? await Task.sleep(nanoseconds: hovering ? (expandDelay ?? hoverExpandDelay) : Self.hoverCollapseDelay)
             guard !Task.isCancelled else { return }
             if hovering {
                 let wasFullyCollapsed = !state.isExpanded && !state.isHovered
@@ -856,17 +880,10 @@ struct ContentView: View {
                 }
             }
             .multilineTextAlignment(.center)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
             .frame(maxWidth: panelWidth - 40)
-            .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.black.opacity(0.82))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.white.opacity(0.10), lineWidth: 1)
-                    }
-            }
+            .background { peekBackground }
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, NotchGeometry.stripHeight + 6)
             .allowsHitTesting(false)
@@ -879,6 +896,48 @@ struct ContentView: View {
             .accessibilityLabel("Now playing: \(peek.track) by \(peek.artist)")
         }
     }
+
+    /// The peek's own surface: Liquid Glass, the same material the system's
+    /// own transient HUDs wear (decision 084).
+    ///
+    /// The peek is a system-HUD-shaped thing — a floating capsule that says
+    /// one thing and leaves — so it is drawn in the material macOS 26 gives
+    /// those: `.regular` glass, which refracts and tints from whatever is
+    /// behind the window rather than sitting on it as a flat black plate.
+    /// Deliberately untinted and independent of `panelStyle`: the AirPods and
+    /// volume HUDs it is meant to sit beside are neutral, and an album-tinted
+    /// peek would change colour under the user on every track.
+    ///
+    /// Glass draws its own rim, but a faint one that dissolves against a bright
+    /// wallpaper, so a rim light is stroked over the top of it to keep the
+    /// peek's edge legible on any background. The black fill is gone with the
+    /// glass, and comes back for the three cases where there is no glass to
+    /// have: Reduce Transparency (the setting means nothing behind shows
+    /// through), the `.solid` panel style (the user has asked this app's chrome
+    /// to be opaque), and macOS 14/15, which has no `glassEffect` at all.
+    @ViewBuilder
+    private var peekBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: Self.peekCornerRadius, style: .continuous)
+        if #available(macOS 26.0, *), !reduceTransparency, prefs.panelStyle != .solid {
+            ZStack {
+                Color.clear.glassEffect(.regular, in: shape)
+                // The same top-up `contentScrim` gives the panel: glass alone
+                // is thinner than the plate it replaces, and Increase Contrast
+                // is a request for the text to win over what is behind it.
+                if contrast == .increased { shape.fill(Color.black.opacity(0.25)) }
+                shape.strokeBorder(Color.white.opacity(0.28), lineWidth: 1.5)
+            }
+        } else {
+            shape
+                .fill(Color.black.opacity(reduceTransparency ? 1.0 : 0.82))
+                .overlay { shape.strokeBorder(Color.white.opacity(0.28), lineWidth: 1.5) }
+        }
+    }
+
+    /// Concentric with the two lines it wraps rather than the 12pt of the
+    /// plate it replaces: the system HUDs this now matches are near-capsules,
+    /// and 20pt is a hair under half the peek's own height.
+    private static let peekCornerRadius: CGFloat = 20
 
     /// Raises the peek for a new track and schedules its retraction.
     ///
@@ -1168,7 +1227,7 @@ struct ContentView: View {
             state.isExpanded = false
             state.isHovered = false
         }
-        SessionFocusService.focus(session)
+        SessionFocusService.focus(session, among: state.sessions)
     }
 
     private func reportHeaderColumnHeight(_ height: CGFloat) {

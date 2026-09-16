@@ -94,6 +94,19 @@
 | 081 | 2026-08-27 | The sneak peek was inside `panelOpacity`'s scope, so it rendered at alpha 0 in clamshell with the strip hidden — the one configuration it was reported missing from. Moved outside it. Separately, the notification calls gain a 4s timeout: `notificationSettings()` was measured never returning under an ad-hoc signature, leaking a task per Settings-open and leaving the UI reporting a state that was not true | Accepted |
 | 082 | 2026-08-27 | The collapse on a **notched** Mac left the expanded content and the glass at full panel size, fading over the desktop after the pill was already back in the notch — a removed SwiftUI subtree keeps the size it had and does not follow the frame inward. Fixed by clipping the panel to its own retracting shape, with the rim light moved outside that clip. Curve changes were tried and reverted: `.animation(_:value:)` on the silhouette scopes the incoming geometry too, and retracted the pill faster than the panel it backs | Accepted |
 | 083 | 2026-08-27 | Settings sidebar icons become System-Settings-style tiles: the glyph in white on a rounded rect filled with a per-pane colour, rather than eight monochrome symbols. Colour is the fastest way to find a row in a fixed list, and the colours echo what each pane controls (green for Agents, sky blue for Weather) | Accepted |
+| 084 | 2026-08-27 | The track-change sneak peek is drawn in Liquid Glass (`glassEffect(.regular)`) instead of a flat black plate with a hairline stroke, so it reads as one of the system's own transient HUDs — the AirPods and volume indicators it appears beside. Untinted and independent of `panelStyle`, because those HUDs are neutral and an album tint would recolour the peek on every track. The plate survives as the fallback for macOS 14/15, Reduce Transparency and the Solid panel style | Accepted |
+| 085 | 2026-08-27 | Clicking an agent light landed on the wrong session: a Ghostty surface is matched by Claude's `ai-title`, which a session does not have until its first turn ends, and an unmatched session fell through to fronting the Ghostty *app* — whichever window was last used, on whatever Space that is. Added a second grade of match on Ghostty's per-surface `working directory`, with surfaces claimed by another live session's title struck out, acted on only when a single surface survives | Accepted |
+| 086 | 2026-08-27 | The sneak peek gets a rim light of its own — 1.5pt white at 0.28, stroked over the glass as well as over the fallback plate. Partly reverses 084's "glass draws its own rim, so the hairline goes": it does, but a rim built from what is behind the window vanishes against a bright wallpaper, which is exactly where a floating capsule most needs an edge | Accepted |
+| 087 | 2026-08-27 | A session's Ghostty surface was unreachable by title once its transcript passed 16MB: `claudeSessionTitle` skipped any file over that cap outright, so the longest-running session on the machine (22MB) fell through to fronting the Ghostty app. The cap is replaced by a backward line scan over the memory-mapped file that stops at the last `ai-title` record — 19KB from the end on that transcript, under 1ms | Accepted |
+| 088 | 2026-08-27 | The shelf's remove button flickered under the pointer: it was offset outside the chip that tracked hover and mounted only while hovered, so reaching for it ended hover, unmounted it, and restored hover — a loop that also sent stray clicks to the chip's drag. It now sits inside the chip, stays mounted, and fades on hover | Accepted |
+| 089 | 2026-08-27 | The pointer becomes a hand over Tempo's own controls, which draw no chrome at rest — the cursor is the only "this is clickable" cue that arrives before the hover highlight. `pointerStyle(.link)` on macOS 15+, a push/pop fallback that unwinds on disappear below it. Settings' standard AppKit controls and onboarding's intentionally-invisible skip target are excluded | Accepted |
+| 090 | 2026-09-04 | The undrawn strip's hover target on an external display shrank from the full invisible pill (pillWidth x 32pt) to a 200x3pt band pressed against the top edge of the screen, so Tempo opens on the same gesture that drops a hidden menu bar rather than whenever the pointer passes near the top of the display | Accepted |
+| 091 | 2026-09-04 | The undrawn strip will not open unless the menu bar is fully down. There is no API for that state — `visibleFrame` does not move when the bar auto-reveals — so Tempo reads the window of a zero-length status item, which rides the bar and slides with it, created only in that one mode. A full-screen tab strip at the top edge no longer trips the notch | Accepted |
+| 092 | 2026-09-04 | The real cause of the panel opening at a full-screen browser's tab strip: `.onHover` fires even where `hitTest` returns nil, because tracking areas ignore hit-testing. Decision 055 assumed otherwise, so the hidden strip had two live hover paths and the unrestricted one — the pill's whole 308x32pt rect — was doing the opening. `.onHover` is now ignored in that mode; the pointer monitor owns it | Accepted |
+| 093 | 2026-09-04 | The undrawn strip's edge push gets its own **Edge hold** setting (Settings ▸ Displays ▸ Placement, 0–150ms after 094 trimmed the ceiling, default 60) rather than sharing the pill's 0–400ms hover delay: pushing into a screen edge is a deliberate gesture with a different right answer than brushing a drawn pill, and it is the one the user needs to tune | Accepted |
+| 094 | 2026-09-04 | Every Settings slider's value is now a text field you can type into — units optional, `Never` and `2.5M` understood, clamped to the range but never snapped to the step, since typing exists to reach what lies between steps. Edge hold's ceiling cut from 1500ms to 150ms: nothing past it is a hold anyone would choose | Accepted |
+| 095 | 2026-09-04 | The undrawn strip's target grows from decision 090's 3pt edge band to the menu bar's own row (measured at 30pt, not the 22pt `NSStatusBar` reports): 3pt was too tight to hold, so relaxing the pointer after the bar dropped cancelled the dwell or collapsed the panel a frame after it opened. Safe because the menu-bar gate, not the height, is what keeps it from firing | Accepted |
+| 096 | 2026-09-07 | The topmost row of the display was outside every pointer-tested region: they are top-anchored rects whose `maxY` is `screen.maxY`, and `NSRect.contains` excludes `maxY` — the exact coordinate a pointer shoved into the edge reports. All three now go through `topAnchoredRegion`, one point taller, overshooting above the screen | Accepted |
 
 ---
 
@@ -5348,3 +5361,804 @@ Sidebar only; nothing else in the window changed, and the row heights are the
 ones AppKit already gave (the tile is 20pt, under the row's own height). Seen
 on screen: all eight tiles draw in their colour with the selected row's tile
 unchanged, which is the point of the white-on-colour shape.
+
+---
+
+## 084 — The sneak peek wears Liquid Glass
+
+**Date:** 2026-08-27
+
+### Context
+
+The track-change peek of decision 072 was drawn on a flat plate:
+`RoundedRectangle(cornerRadius: 12)` filled black at 0.82 with a 1pt white
+hairline over it. That was written before the panel itself moved to Liquid
+Glass (decisions 030 and 064), and it was the last surface in the app still
+faking a material by painting one.
+
+It is also the surface with the clearest system precedent. The peek is exactly
+the shape of a macOS HUD — a capsule that appears unbidden, says one thing and
+retracts — and on macOS 26 the AirPods connection and volume indicators it
+appears a few points below are all Liquid Glass. A black plate next to them
+reads as a third-party overlay, which is what it was.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Keep the painted plate | Works on every supported OS with one code path | Visibly not the system's material; the one surface still painting a material by hand |
+| `.regular` glass, neutral | The material the system HUDs beside it use; refracts what is behind rather than covering it; glass draws its own rim, so the hairline goes | Needs an `#available(macOS 26.0)` fallback and a Reduce Transparency branch |
+| Glass tinted with the album colour, or following `panelStyle` | Consistent with the panel's own style setting | The HUDs it sits beside are neutral, and a peek that changes colour every track is decoration competing with the two lines it exists to show |
+
+### Decision
+
+`.regular` glass in a 20pt continuous rounded rect, untinted, with the padding
+opened from 14/8 to 16/10 so the capsule keeps the system HUDs' proportions.
+The hairline stroke and the black fill are gone with it — Liquid Glass draws
+its own rim and shading.
+
+Three cases still get the old plate, and all three are the same statement:
+there is no glass to have. Reduce Transparency (nothing behind may show
+through), `panelStyle == .solid` (the user asked this app's chrome to be
+opaque), and macOS 14/15, which has no `glassEffect`. Increase Contrast adds a
+0.25 black scrim between the glass and the text, mirroring `contentScrim`'s
+top-up for the panel.
+
+The peek deliberately does **not** follow `panelStyle` beyond honouring
+`.solid`. `panelStyle` is a statement about the panel — the surface the user
+opens and reads — and the peek is a system-HUD-shaped thing that shows up
+without being asked for.
+
+### Consequences
+
+Verified on screen on macOS 26.6.2: a real Spotify track change was driven at
+zero volume with the pointer away from the notch, and captured over both a
+dark terminal and an Outlook window. The capsule refracts and lenses what is
+behind it and carries the glass rim, and the title and artist hold at white and
+secondary-white over both. The window is pinned to `.darkAqua`
+(`NotchWindow.swift`), so the glass resolves to its dark variant no matter how
+bright the desktop behind it is — the same reason the panel's own glass is
+legible.
+
+No change to when the peek fires, how long it stays, what it says, or what it
+claims: the window's hit region is geometry-driven
+(`NotchHitRegion`/`NotchHostingView.hitTest`), so glass pixels below the pill
+take no clicks, exactly as the painted plate took none.
+
+## 085 — A Ghostty session is found by its folder when it has no title yet
+
+**Date:** 2026-08-27
+
+### Context
+
+Reported: Tempo takes you to the wrong agent session when the sessions live in
+different Spaces and their windows have been reordered since they were started.
+
+Measured on this machine with three live `cli` sessions (two in
+`~/Documents/code/Tempo`, one in `~`), each in a Ghostty window on its own
+Space. The parts that work were verified first, so the fix would not be aimed
+at the wrong thing:
+
+- Ghostty's app-level `terminals` element lists **every** surface regardless of
+  Space — three surfaces returned while zero Ghostty windows were on the
+  current Space. (Its `windows` element does *not*: it returned two of the
+  three windows, then one, then two again as focus moved. Nothing here reads
+  it.)
+- `focus` crosses Spaces and activates the app. From Finder frontmost and no
+  Ghostty window on the current Space, focusing the `LHR 400` surface left
+  Ghostty frontmost with exactly that window on screen.
+- Tab order is irrelevant to the match: the title match resolved all three
+  sessions to the correct surface id, in one dry run, with no ordering input.
+
+What does *not* work is the case the title cannot express. Claude Code writes
+its `ai-title` only after a turn has ended, so a session is untitled for
+exactly as long as it is new — "after first starting them". With no title,
+`focusGhosttySurface` returns false immediately and `focusCLISession` falls
+through to `activateProcess(terminal.pid)`, which fronts the Ghostty
+*application*. That lands on whichever Ghostty window was last used — and when
+each window sits on its own Space, that is a Space switch to a different
+session. The fallback exists for "another emulator, or a tab we could not
+match", and it is the wrong answer for Ghostty specifically, because Ghostty
+does expose enough to identify the surface.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Leave it; the title arrives eventually | No code | The wrong-session jump is exactly what the user reported, and every session passes through the untitled state |
+| Decline the click when no title matches, as AgentStatus's Windows `pick_window` does | Never lands wrong | A click that does nothing reads as broken, and Ghostty has an identifier the Windows path does not |
+| Match on Ghostty's per-surface `working directory` | Present from the first millisecond of a session, no `ai-title` needed; already published per surface (OSC 7, the shell's real cwd), the same path the status file carries | Not unique on its own — two sessions in one repo share a folder |
+| `working directory`, minus the surfaces another live session's title already claims | Unique in the reported case (two Tempo sessions, one of them titled); degrades to the old fallback only when *two* sessions in one folder are both untitled | Costs one extra `osascript` and reads the sibling sessions' titles, but only on the path where the click was going to be wrong anyway |
+
+### Decision
+
+The last one. `focusGhosttySurfaceByDirectory(cwd:siblings:)` runs only after
+the title match has already failed, and focuses a surface only when exactly one
+survives:
+
+1. A Ghostty running exactly one surface *is* the session's surface — the
+   caller has already walked the session's process tree to this Ghostty
+   instance.
+2. Otherwise, strike out every surface whose title ends with another live
+   session's `ai-title` (a surface showing a different session is not this
+   one), then keep the ones whose `working directory` is this session's `cwd`.
+   One survivor is focused; zero or several fall through to the old app-level
+   fallback unchanged.
+
+Paths are compared with AppleScript's default text comparison, which ignores
+case: OSC 7 reports the cwd as the shell spells it, and the surfaces here
+report `~/documents/code/tempo` against the status file's
+`~/Documents/code/Tempo`.
+
+The detached-background-agent branch deliberately does **not** get this. That
+branch runs when the session has no controlling terminal, so it has no surface
+of its own; a folder match there would front some other session's tab and call
+it the agent.
+
+`SessionFocusService.focus` therefore takes the session list as well as the
+session — the elimination step needs to know who the other sessions are.
+
+### Consequences
+
+Verified against the three live sessions:
+
+- Simulating the untitled case for the Tempo session (its own title withheld,
+  the other two passed as claimed) picked exactly one surface, the right one:
+  `hits=1 :: ◐ Tempo agent session navigation across spaces`. Run for real, the
+  front Ghostty window changed to the intended session.
+- The genuinely ambiguous case — both Tempo surfaces in the folder, neither
+  claimed — returned `no`, so the old fallback still carries it rather than a
+  coin flip.
+
+No change to the titled path, to Terminal.app, to the editors, or to the
+background-agent branch. Nothing is written, and the sibling transcripts are
+opened only for their `ai-title` string, on a click, exactly as the session's
+own already was (Agent Guideline #5).
+
+
+---
+
+## 086 — The sneak peek gets a rim light
+
+**Date:** 2026-08-27 · **Status:** Accepted
+
+### Context
+
+Decision 084 dropped the peek's 1pt white hairline on the reasoning that
+Liquid Glass draws its own rim. It does — but that rim is derived from what is
+behind the window, so its contrast against the desktop varies with the
+desktop. Over a dark terminal the capsule's edge is obvious; over a bright
+window or a light wallpaper it thins to nearly nothing and the two lines of
+text read as floating loose under the notch rather than sitting on a surface.
+
+The fallback plate had the opposite problem for the same reason: its stroke
+was fixed at white 0.10, faint enough to be decorative rather than an edge.
+
+### Decision
+
+One rim light, the same on both paths: `strokeBorder(.white.opacity(0.28),
+lineWidth: 1.5)` on the peek's 20pt rounded rect. On macOS 26 it is stroked
+over the glass as the topmost layer of the `ZStack`; on the plate it replaces
+the old 0.10/1pt overlay.
+
+`strokeBorder` rather than `stroke` so the line is inset into the shape and
+does not straddle the glass's own boundary, which would fringe against the
+refracted edge.
+
+The rest of 084 stands: still `.regular` glass, still untinted, still
+independent of `panelStyle` beyond honouring `.solid`, same corner radius,
+same padding, same three fallback cases.
+
+### Consequences
+
+Nothing else changes — the peek fires on the same trigger, for the same
+duration, and takes no clicks. `swift build` clean.
+
+---
+
+## 087 — The session title is read from the end of the transcript, not the whole file
+
+**Date:** 2026-08-27
+
+### Context
+
+Reported: clicking the light for the session running in `~` does not go to its
+Ghostty window, which sits in a separate Ghostty window on its own Space.
+
+Measured on this machine, against that live session
+(`3a9a3e92…`, pid 75616, `ide: cli`):
+
+- The Ghostty surface is there and is titled: `terminals` lists
+  `✳ LHR 400 class alternatives`, working directory `~`.
+- Claude's current title for the session is exactly `LHR 400 class
+  alternatives`, so `focusGhosttySurface`'s strong match — surface title *ends
+  with* session title — would have resolved it in one step.
+- It never ran. `claudeSessionTitle` returns nil before reading anything,
+  because the transcript is **22,788,432 bytes** and the function skipped any
+  file over 16MB (decision 035's guard against reading a large file on the
+  click path).
+- With no title, the click fell to decision 085's directory match, which also
+  missed: the status file for this session records
+  `cwd: ~/.claude/projects/-Users-<user>` — the
+  transcript's *project directory*, not the session's working directory, which
+  `lsof` confirms is `~`. That value comes from the hook
+  payload AgentStatus writes verbatim; Tempo is read-only on it (Agent
+  Guideline #3) and cannot correct it.
+- Both matches failing, the click ended at `activateProcess(terminal.pid)`,
+  which fronts the Ghostty application — from a Space with no Ghostty window on
+  it, that is a jump to whichever Ghostty window was last used. Exactly the
+  symptom reported.
+
+Two things that were suspected and ruled out by measurement, so the fix would
+not be aimed at the wrong thing:
+
+- **Ghostty's `focus` does cross Spaces.** Sampling `CGSGetActiveSpace` around
+  the call, with Outlook frontmost and no Ghostty window on the current Space,
+  the active space moved from 3 to 263 within 500ms and stayed there. (It is a
+  no-op when Ghostty is *already* the frontmost application while its windows
+  are on another Space — a state a previous failed click leaves behind, and the
+  reason an early probe here showed no switch.)
+- **Nothing in the AppleScript needed changing.** Adding `activate` after
+  `focus` was tried and made no difference to the space switch.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Raise the cap to 32/64MB | One-line change | Buys months, not a fix; the next long session hits the new number and fails the same silent way |
+| Shell out to `tail -c` and parse that | Small | Another process on the click path, and a title that stopped updating early would still be missed |
+| Read the file backwards, mapped, stop at the first `ai-title` from the end | The current title *is* the last such record, so the scan ends where the answer is — 19KB in on the file that broke this; no cap left to age out; `Data(contentsOf:options:.mappedIfSafe)` never materialises 22MB | Worst case (a session titled once, long ago) still walks the file, though only through mapped pages |
+
+### Decision
+
+The third. `claudeSessionTitle` maps the transcript and walks it backwards a
+line at a time, parsing only lines that contain `"ai-title"` and returning the
+first one that yields a non-empty `aiTitle`. The 16MB guard is gone — the
+guard is now the scan's own direction, which is a property of the file format
+rather than a number to be outgrown.
+
+Verified with the shipped code compiled standalone against the real files:
+`LHR 400 class alternatives` from the 22MB transcript in under 1ms (nil
+before), the correct title from a 1MB transcript, and nil for a file with no
+records.
+
+### Consequences
+
+The reported click now resolves through the strong title match, the same path
+every other titled session already used; decision 085's directory match stays
+as the fallback for sessions Claude has not titled yet.
+
+The bad `cwd` in that session's status file is untouched and still makes the
+directory fallback miss for it — it only matters if the session is ever
+untitled again, and correcting another tool's data is not Tempo's to do.
+
+---
+
+## 088 — The shelf's remove button stops fighting the pointer
+
+**Date:** 2026-08-27
+
+### Context
+
+Removing a file from the shelf was reported as "really difficult: the x
+flickers a lot when hovering over it."
+
+The cause is a hover loop, visible in the code as written. The 52pt chip owned
+the `.onHover`; the remove button was a 24pt hit target pushed out of the chip
+by `.offset(x: 8, y: -8)`, so roughly two-thirds of it sat **outside** the
+region hover was tracked on. The button was also mounted conditionally —
+`if hoveredID == item.id { Button … }`.
+
+That is a cycle: the pointer reaches for the button → it leaves the chip →
+`hoveredID` clears → the button unmounts → the pointer is now over bare chip
+again → hover returns → the button remounts under the pointer. Each frame the
+pointer sits in the overhanging area, the button appears and disappears, and a
+click that lands mid-cycle hits the chip's `.onDrag` instead of the button —
+which is why the file gets dragged out rather than removed.
+
+A second, smaller defect sat next to it: `hoveredID = $0 ? item.id : nil`
+clears the shared state unconditionally on exit, so moving from one chip
+straight onto its neighbour can arrive as (enter B, exit A) and leave nothing
+hovered.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Pad the chip so the hover region reaches the offset button | Keeps the button's outside-the-corner look | Padding is layout: it adds 8pt of gap to every chip in the row and changes the row's spacing and height |
+| Track hover with an `NSTrackingArea` over the union of both frames | Exact control of the region | AppKit plumbing for one 24pt button, and the union still has to be kept in sync with the layout |
+| Keep the button inside the chip, mounted always, and fade it | The hover region and the button occupy the same rect by construction — no geometry to keep in sync, no layout change | The x no longer overhangs the corner |
+
+### Decision
+
+The third. The button loses its `.offset` and sits at the chip's top-trailing
+corner, inside the bounds `.onHover` already tracks, so reaching for it cannot
+end hover. It stays mounted at all times and is faded with
+`.opacity(isHovered ? 1 : 0)` plus `.allowsHitTesting(isHovered)` — hit-testing
+never churns, and there is no insertion/removal for the pointer to chase. The
+fade runs on a 0.12s ease-out.
+
+The exit handler now clears only its own id (`else if hoveredID == item.id`),
+so a chip-to-chip move cannot have the departing chip erase the arriving one's
+hover.
+
+The glyph is drawn in palette rendering — 0.85 primary on a 0.25 primary
+circle — because at the corner of a filled chip a `.secondary` `xmark.circle.fill`
+has too little separation from the chip behind it.
+
+### Consequences
+
+The 24pt hit target is unchanged, and it is now entirely on the chip, so every
+part of it is clickable on the first try. The row's spacing, chip size and
+height are untouched. The context menu's **Remove** remains as the second path.
+
+---
+
+## 089 — The pointer becomes a hand over a control
+
+**Date:** 2026-08-27
+
+### Context
+
+Following 088: the shelf's remove button was hard to use partly because
+nothing tells you where a control's edge is until you are already on it.
+
+That is true of the whole panel, not just the shelf. Decision 062's controls
+draw **no chrome at rest** — the transport glyphs, the gear, the device chips
+and the shelf's x are bare until hover fills a capsule behind them. The hover
+highlight is the only "this is clickable" cue, and it arrives *after* you have
+already found the thing. The cursor is the one cue that can arrive first,
+while the pointer is still travelling.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| `NSCursor.pointingHand.set()` on hover-in, `.arrow.set()` on hover-out | One line, works on every macOS Tempo targets | `set()` is a bare assignment with no owner: a control that vanishes under the pointer sends no exit event, and in a borderless panel with no cursor rects nothing restores the arrow — the hand strands on the desktop |
+| `push()`/`pop()` on hover | Has a defined unwind | The stack corrupts if a push is not paired, which is exactly what the vanishing-control case does |
+| `pointerStyle(.link)` (macOS 15+), push/pop with an unwind on disappear below it | The system owns the cursor's lifetime on 15+, so a disappearing control cannot strand it; the fallback's `onDisappear` closes the one hole push/pop has | Two code paths until the deployment target moves off macOS 14 |
+
+### Decision
+
+The third, as one `pointingHandCursor()` modifier in `NotchStyle.swift`.
+
+Applied at the shared layer wherever there is one: inside
+`NotchButtonStyle.ControlBody`, which covers the transport buttons, the gear,
+Connect Spotify, add-to-playlist and the agent rows in a single place. The
+controls no style can reach get it individually — the shelf's remove button,
+the mute button and the device chips (`.plain`), the playlist picker (a `Menu`,
+which no ButtonStyle can see), and onboarding's two custom styles.
+
+**Two deliberate exclusions.** The Settings window keeps the system's
+behaviour: those are standard AppKit controls, and on macOS the arrow over a
+real button is the convention — the hand means *link*. This is for Tempo's own
+chrome-less surfaces, where that convention has nothing to work with. And
+onboarding's "hello" skip target keeps the arrow, because it is deliberately a
+target with no visible affordance (a Skip button would out-shout the animation
+it interrupts) and a hand cursor across the whole word would announce exactly
+what that design hides.
+
+### Consequences
+
+Every control in the expanded panel now declares itself before the pointer
+lands on it, which is the cue 088's button was missing. The hit targets, the
+hover highlights and the layout are unchanged — this adds a cursor and nothing
+else.
+
+---
+
+## 090 — The invisible notch opens at the screen edge, not near it
+
+**Date:** 2026-09-04
+
+### Context
+
+Decision 055 gave the undrawn collapsed strip a pointer-watched hover target,
+because a pill that claims no clicks gets no `.onHover` of its own. That target
+was deliberately "exactly where the pill would be": `pillWidth` wide and
+`stripHeight` (32pt) tall, hung off the top of the screen.
+
+In use on an external display that is the wrong shape. 32pt is deep enough that
+the pointer crossing the top of the screen on its way somewhere else — to a
+window's title bar, to a tab, to the menu bar itself — lands in it, and the
+panel drops open over the app the user was actually reaching for. The pill is
+invisible there, so there is nothing on screen that explains why.
+
+The gesture the user described is the one macOS already trains: push the
+pointer into the very top edge, the way you reveal an auto-hidden menu bar, and
+*then* Tempo appears alongside it.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Keep the pill-shaped region, raise the dwell delay | No geometry change | The panel still opens on a pass-through, just later; and the dwell is a user setting that governs the drawn strip too |
+| Thin band at the top edge (chosen) | Matches the menu-bar-reveal gesture exactly; the cursor cannot travel past `maxY`, so resting on the edge is a stable, easy target rather than a pixel-accurate one | Deliberate: a pointer 4pt below the edge no longer opens it |
+| Require a dedicated gesture (edge push with a velocity or dwell test of its own) | Even harder to trigger by accident | New mechanism, new tuning, and nothing else in Tempo works that way |
+
+### Decision
+
+The second. `NotchGeometry.hoverActivationRegion`, which only
+`NotchHoverDetector` reads, is now `notchWidth` (200pt) wide by
+`hiddenStripActivationHeight` (3pt) tall, flush with `screen.maxY`.
+
+3pt rather than 1pt because `NSEvent.mouseLocation` is in points on a display
+whose backing scale need not be 1, and the top row of a screen is not
+guaranteed to report exactly `maxY`. Width drops from `pillWidth` to
+`notchWidth` for the same reason the height dropped: the region is an invisible
+target, and it should be no larger than the thing it opens.
+
+Everything else is untouched. This region is read in exactly one mode — the
+strip switched off *and* no hardware notch (decision 055) — so a real notched
+display, and an external display with the strip drawn, both still hover through
+`.onHover` on the pill itself. Once the panel is open the detector switches to
+`expandedPanelRegion`, so moving down off the edge into the controls keeps it
+open as before.
+
+### Consequences
+
+On an external display with the strip hidden, Tempo now stays out of the way
+until the pointer is against the top edge of the monitor. The cost is that the
+target is unforgiving by design: brushing past the top of the screen no longer
+opens the panel, which is the point.
+
+---
+
+## 091 — The notch opens only once the menu bar is down
+
+**Date:** 2026-09-04
+
+### Context
+
+Decision 090 shrank the undrawn strip's hover target to a 200 x 3pt band at the
+very top edge, which stopped the panel opening on a pass-through. It did not
+stop the case that actually costs the user something: in a full-screen browser
+the tab strip runs to the top edge of the screen, so reaching for a tab puts
+the pointer in exactly the same 3pt row the notch listens to. Position alone
+cannot tell "aiming at a tab" from "aiming at Tempo" — both are `y = maxY`.
+
+The user's own framing is the discriminator: *"make it so I can't open tempo
+unless the apple menu bar is down as well."* macOS only drops an auto-hidden
+menu bar when the pointer pushes into the edge and stays; hovering a tab strip
+never drops it. Gate on that, and the two gestures separate cleanly.
+
+### Options
+
+Measured on this machine before choosing (Agent Guideline #4), with a probe
+logging each candidate at 10Hz while the menu bar was hidden, revealed, and
+hidden again:
+
+| Option | Result |
+| --- | --- |
+| `NSMenu.menuBarVisible()` | Answers a different question (app-level hiding). Constant `true` in both states |
+| `NSScreen.visibleFrame` | Reserved the same 30pt in both states — does not move when the bar auto-reveals. Dead |
+| The menu bar's own window via `CGWindowListCopyWindowInfo` | The bar is not enumerable: nothing at layer 24 in either state. The transient `Window Server` entries that do appear blink with the pointer parked, so they are not it. Dead |
+| Accessibility API (`kAXMenuBarAttribute`) | Would work, and sees the real bar rather than a proxy — but costs an Accessibility TCC grant Tempo has never needed |
+| A status item's window | Tracks it exactly. On a 1440pt screen with a 30pt bar: hidden `y = 1440` (entirely above the top edge), sliding `1434 … 1416`, fully down `y = 1410` |
+
+### Decision
+
+The last, as `MenuBarSensor` (`Services/MenuBarSensor.swift`): a **zero-length**
+status item whose button draws nothing, created only while
+`NotchHoverDetector` is running — the one mode that asks this question
+(decision 055). Everywhere else Tempo still puts nothing in the menu bar. The
+sensor reports *fully* down only: the slide's intermediate frames hang off the
+top of the screen and read false, so the gate opens when the bar has arrived
+rather than while it is on its way.
+
+Presented to the user with its one real cost — Tempo owning a menu-bar slot in
+that mode — and chosen over the two cheaper alternatives (a longer edge dwell,
+which cannot separate the gestures, and the Accessibility grant).
+
+**Two deliberate scope limits.**
+
+The gate applies to *opening* only. Once the panel is open the region is the
+panel itself, ungated: moving down into the controls retracts the menu bar, and
+gating there would slam the panel shut the instant it was used.
+
+The pointer held against the edge sends no further `mouseMoved` events, and the
+bar drops a beat after it arrives — so the gate would otherwise be evaluated
+once, before the bar had moved, and never again. A 0.1s timer re-evaluates it,
+running only while the pointer is inside the band.
+
+### Consequences
+
+On a display where the menu bar auto-hides, Tempo now opens on the same push
+that drops the bar, and a full-screen tab strip at the top edge no longer trips
+it. Where the menu bar is permanently visible the sensor reads down at all
+times, so behaviour there is exactly decision 090's. The cost is a menu-bar
+slot in the hidden-strip mode, and a 10Hz poll for as long as the pointer sits
+in a 200 x 3pt band.
+
+---
+
+## 092 — `.onHover` fires where `hitTest` says nothing is there
+
+**Date:** 2026-09-04
+
+### Context
+
+Decisions 090 and 091 both aimed at the same report — the panel opening when
+the user reaches for a tab in a full-screen browser on the external display —
+and neither changed the symptom. 090 shrank the hover band to 200 x 3pt at the
+screen's edge; 091 gated it on the menu bar being fully down. The user, after
+both: *"this is not helping: im still running into tempo when trying to hit
+chrome tabs."*
+
+Instrumenting the running app (`TEMPO_DEBUG_HOVER=1`) and having the user
+reproduce it settled it in one pass. Across 3798 logged samples covering
+several misfires:
+
+- `atEdge=true` occurred **zero** times. The band was correct
+  (`x1620…1820 y1437…1440` on a 3440x1440 screen) and the pointer never
+  entered it.
+- The menu-bar gate was never even consulted — it sits behind `atEdge` in an
+  `&&`.
+- Every misfire began with `### SwiftUI .onHover on the panel view: true`,
+  followed by the panel opening, followed only *then* by
+  `isPointerNearNotch = true` — the pointer monitor reporting the pointer
+  inside the panel that had already opened. Cause and effect were the reverse
+  of what was assumed.
+
+Decision 055 states that with the strip undrawn "the collapsed pill is
+invisible *and* claims no clicks — `NotchHostingView.hitTest` returns nil over
+it, so the window receives no mouse events there at all and SwiftUI's
+`.onHover` can never fire." The first half is true and still is. The second
+half does not follow: **`.onHover` is implemented with an `NSTrackingArea`,
+and tracking areas deliver `mouseEntered` / `mouseExited` regardless of what
+`hitTest` returns.** Hit-testing governs which view a *click* is routed to; it
+does not gate tracking. So the mode has had two live hover paths all along —
+the pointer monitor, band-limited and now gated, and `.onHover` over the
+collapsed pill's whole ~308 x 32pt rect at the top of the screen, restricted by
+nothing. The second is what a full-screen tab strip runs into.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Ignore `.onHover` while the strip is hidden (chosen) | One guard, in the mode that already has a dedicated pointer path; leaves every other mode's hover exactly as it is | Nothing observable — that path was never supposed to be live here |
+| Shrink the `.onHover` view to the band | Keeps a single hover path | The view is the drawn pill; resizing it to sense hover would change what is drawn, and the pill is drawn at the pill's size in every other mode |
+| Drop the pointer monitor and gate `.onHover` instead | One path rather than two | `.onHover` reports enter/exit of a view rect, not a screen band; the menu-bar gate needs polling while the pointer is stationary, which enter/exit cannot provide |
+
+### Decision
+
+The first. `ContentView`'s `.onHover` returns immediately when `stripHidden`,
+so in that mode `NotchHoverDetector` owns hover entirely — opening *and*
+closing — which is what decision 055 intended and described. Every other mode
+is untouched: the drawn pill still hovers through `.onHover` exactly as before.
+
+### Consequences
+
+The edge band (090) and the menu-bar gate (091) finally govern this mode,
+because they are now the only way in. Both were correct when built and neither
+was reachable. The lesson for anything similar: `hitTest` and tracking areas
+are independent mechanisms, and "no clicks" does not imply "no hover" —
+verify a suppression rather than reasoning it (Agent Guideline #4).
+
+---
+
+## 093 — The edge push gets its own hold setting
+
+**Date:** 2026-09-04
+
+### Context
+
+After decision 092 made the edge band the only way into the undrawn strip, the
+user asked to be able to tune it: *"lets also make sure that we are able to
+tweak things like how long we need to hold the cursor on the menu bar in
+settings."*
+
+The dwell was already a setting — `hoverExpandDelayMS`, Settings ▸ General ▸
+Interaction ▸ *Hover delay* — and `handleHover` applied it to both entry paths.
+But it is scaled for the drawn pill: 0–400ms, default 60, and its whole
+justification (decision 034) is about a pointer *brushing across* the notch on
+its way somewhere else. Pushing into a screen edge and holding is a different
+gesture, and one the user has now been burned by three times, so the value they
+want is unlikely to be the value that makes the pill feel right.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Raise the existing *Hover delay* ceiling and keep one setting | No new configuration surface (AI Guideline: avoid over-configurability) | One slider governing two gestures with opposite ideals — a hold long enough to make the edge deliberate makes the drawn pill feel broken |
+| A separate **Edge hold** (chosen) | Each gesture tunes independently; the range can run to 1500ms where a deliberate hold actually lives | One more setting, shown in one more place |
+| Hard-code a longer edge hold | Nothing to tune | Exactly what was asked for, refused |
+
+### Decision
+
+The second. `Preferences.edgeHoldDelayMS`, 0–1500ms in 50ms steps, default 60 —
+the same value the shared setting had, so nobody's current feel changes.
+`handleHover` takes the delay as a parameter; the pointer-monitor path passes
+`edgeHoldDelay`, and everything else keeps `hoverExpandDelay`.
+
+It sits in Settings ▸ Displays ▸ Placement, directly under *Show the strip on
+external displays*, and is disabled while that toggle is on — the mode it
+governs cannot occur then. Not in General ▸ Interaction beside the pill's hover
+delay: two sliders with near-identical labels, one of which silently does
+nothing in most configurations, is worse than putting each next to the thing it
+affects.
+
+The hold is measured *after* the menu bar has finished dropping (decision 091),
+so the two add up in use — the footer says so, because a user setting 0 and
+still waiting half a second deserves to know why.
+
+### Consequences
+
+The edge gesture is tunable from 0 (opens the moment the menu bar lands) to
+a deliberate hold, without touching how the drawn pill feels. (The ceiling
+shipped at 1500ms and was cut to 150ms by decision 094 the same day.) The
+band's *height* stays fixed at 3pt — it is not exposed as a setting, since
+nothing so far suggests the geometry is what needs tuning, and a second knob
+for the same gesture would make finding the right feel harder, not easier.
+
+---
+
+## 094 — Slider values can be typed, and Edge hold stops at 150ms
+
+**Date:** 2026-09-04
+
+### Context
+
+Two pieces of feedback on decision 093's slider: *"I should be able to fine
+tune sliders by entering the values manually. Also, the sliders for edge hold
+seem a bit much: i doubt anyone would use anything over 150 ms."*
+
+Both are about the same thing — a slider is a coarse instrument. Tempo has
+seven of them, and their steps are chosen for dragging: 10ms, 0.05, 0.5s, 10s,
+250,000 tokens, 1%. Any value between two steps was unreachable, and the range
+had to be wide enough for the extreme nobody wants in order to reach it at all.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| A `TextField` on every slider row (chosen) | One change covers all seven; the value was already displayed there, so nothing new appears in the window | Each row's units differ, so each needs to say how its own text parses |
+| Finer steps instead | No new control | Makes dragging worse to make typing unnecessary, and still cannot express 75 on a 50-step slider |
+| A stepper beside each slider | Precise | Slower than typing, and a third control in a row that already has two |
+
+### Decision
+
+The first. `SliderRow`'s read-only `Text` becomes a `TextField`, and the row
+gains a `parse` closure — handed the field's text verbatim, unit and all,
+because only the row knows what `%` is a percentage *of*, what `M` multiplies,
+or that "Never" is its own word for zero. Returning nil rejects the edit and
+the field reverts to the real value.
+
+Three details that make it feel right rather than merely work:
+
+- **Clamped, never snapped.** A typed value is held to the row's range and then
+  kept exactly as entered. Snapping it to `step` would defeat the entire
+  purpose — dragging is what steps; typing is how you reach 75 on a slider that
+  moves in 50s.
+- **Units are optional on input.** `150`, `150 ms` and `150ms` all read as 150,
+  so the displayed text can be edited in place without first deleting its unit.
+  `2.5M` and `500K` work on the token budget, and `Never` on the paused-media
+  timeout.
+- **Clicking away commits**, exactly as Return does. A typed value that
+  silently evaporates because the field lost focus is worse than no field.
+
+And Edge hold's ceiling drops from 1500ms to 150ms, with the step from 50ms to
+10ms. The wide range existed to make a deliberate hold *reachable*; typing
+reaches any value now, so the slider can be scaled to the useful span instead.
+
+### Consequences
+
+Every slider in Settings is now precise to whatever its units allow, and the
+edge-hold slider spends its whole width on the 0–150ms range that matters.
+Dragging behaviour is unchanged everywhere. The one asymmetry worth knowing:
+after typing a between-steps value, the next drag snaps back to the step grid —
+correct, but worth not being surprised by.
+
+---
+
+## 095 — The target is the menu bar's row, not a 3pt band
+
+**Date:** 2026-09-04
+
+### Context
+
+With decision 092 in place the misfire was gone — the panel no longer opens at
+a full-screen browser's tab strip. What surfaced underneath it: *"sometimes
+when menu bar is down it doesnt expand, or it flickers and then goes away."*
+
+Both symptoms are one cause. Decision 090's band is 3pt tall, and it has to
+hold the pointer for the whole dwell, not merely be touched. Pushing into a
+screen edge is a shove: the pointer lands at `maxY`, the menu bar drops, and
+the hand relaxes a pixel or two down into the bar it just revealed. That exits
+the band — cancelling the dwell before it fires (no expand), or, if the dwell
+had already fired, collapsing the panel a frame after it opened (the flicker).
+
+The band was sized that way when it was the *only* protection against opening
+by accident. It is not any more: decision 091's menu-bar gate is, and a menu
+bar that is down covers whatever was underneath it — including the tab strip
+this whole thread is about.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Keep 3pt, add hysteresis (a larger rect to stay in than to enter) | Keeps the strict entry | Two rects to reason about, and the entry still has to be hit precisely at the moment the bar drops |
+| Grow the target to the menu bar's row (chosen) | The pointer cannot relax out of it while the bar is down, because the bar *is* that row; nothing is given up, since the gate is what does the filtering | Where the menu bar never hides, the target is a 200 x 30pt strip in the middle of the bar — which is decision 055's original behaviour |
+| Lengthen the dwell instead | No geometry change | Wrong axis entirely: the problem is leaving the region, not leaving too soon |
+
+### Decision
+
+The second. `hoverActivationRegion` takes the height as a parameter and the
+detector passes `MenuBarSensor.barHeight` — **measured from the sensor's own
+status window** rather than asked for. `NSStatusBar.system.thickness` returns
+22 on this machine while the bar actually occupies 30pt on screen, and 30 is
+where the pointer is; the 8pt difference is exactly the relax that was
+cancelling the dwell. The sensor already owns a window in the bar, so the true
+height is free.
+
+The poll that keeps the gate live now runs while the pointer is anywhere in
+that row, not just at the extreme edge — otherwise a pointer that entered the
+row a few points low would sit there with the bar down and never be looked at
+again.
+
+### Consequences
+
+Pushing into the top edge and holding now opens the panel reliably, and it
+stays open while the pointer rests anywhere in the notch-width span of the menu
+bar. The 3pt band from decision 090 is gone; what stops the accidental opens is
+decision 091's gate plus decision 092's fix, which is where that job belonged.
+
+---
+
+## 096 — The topmost row of the screen is inside the target, not outside it
+
+**Date:** 2026-09-07
+
+### Context
+
+*"tempo on external monitor has a dead zone on the very top when touching the
+edge of the monitor."* Decision 095 grew the undrawn strip's target to the
+menu bar's full 30pt row precisely so a shoved pointer could not relax out of
+it — and yet the one place the shove actually lands, the topmost row itself,
+still did nothing.
+
+Measured on this machine with a cursor-warp probe (LG ULTRAWIDE 3440x1440, the
+only attached display, lid closed, `showStripOnExternalDisplays` off, menu bar
+30pt):
+
+    warp to Quartz y=0  ->  NSEvent.mouseLocation.y = 1440.00 = frame.maxY   contains = no
+    warp to Quartz y=1  ->  NSEvent.mouseLocation.y = 1439.00               contains = YES
+    warp to Quartz y=2  ->  NSEvent.mouseLocation.y = 1438.00               contains = YES
+
+`NSRect.contains` excludes its own `maxY`, and every one of Tempo's
+pointer-tested regions is built as `NSRect(y: screen.maxY - height, height:
+height)` — so its `maxY` *is* `screen.maxY`, the exact coordinate the pointer
+reports when it is parked against the top edge. The region covered the whole
+bar except the one row the gesture ends on. Backing off a single point worked,
+which is what made it read as a "dead zone" rather than as broken hover.
+
+Three regions shared the bug: `hoverActivationRegion` (the panel would not
+open), `expandedPanelRegion` (a panel already open would not stay open with
+the pointer at the edge), and `dragActivationRegion` (a file dragged to the
+very top would not open the shelf).
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| `NSMouseInRect(p, rect, false)` at each call site | Cocoa's own edge-inclusive test | Inclusive on the *bottom* edge instead, which is a real boundary here — the panel's lower edge would over-claim by a point; and three call sites to remember |
+| Clamp the pointer's y to `maxY - 0.5` before testing | One place, no geometry change | Lies about where the pointer is, in a value other logic may later read |
+| Build the regions one point taller, overshooting above the screen (chosen) | The regions stay plain rects tested with plain `contains`; the extra point is off-screen space no pointer can reach, so no other edge moves | The rect no longer equals the visual region it describes, which needs saying in a comment |
+
+### Decision
+
+The third, via a single `NotchGeometry.topAnchoredRegion(width:height:)` that
+all three regions now go through: horizontally centred on the target screen,
+top-anchored, `height + 1` tall. The overshoot lives entirely above
+`screen.maxY`, so the only coordinate it adds is the topmost row itself.
+
+### Consequences
+
+Slamming the pointer into the top edge of the display now opens the notch, and
+holding it there keeps the panel open. Nothing else about the target changed —
+same width, same menu-bar gate from decision 091, same dwell. The drawn
+strip's own hit region (`NotchHostingView.hitTest`, in window coordinates) has
+the same top-row exclusion, left alone here: over a hardware notch that row is
+unlit hardware, and with the strip drawn on an external display hover comes
+from a tracking area rather than from that rect. Worth revisiting only if a
+click on the pill's topmost row is ever reported as missing.

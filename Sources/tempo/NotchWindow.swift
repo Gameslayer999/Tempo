@@ -186,40 +186,62 @@ enum NotchGeometry {
     /// a 32pt strip (decision 051).
     static let dragActivationMargin: CGFloat = 80
 
+    /// A region flush with the top of the target screen, in screen coordinates
+    /// (origin bottom-left, matching `NSEvent.mouseLocation`), horizontally
+    /// centred on the screen.
+    ///
+    /// One point *taller* than asked for, overshooting above the screen's top
+    /// edge, because `NSRect.contains` excludes its own `maxY` and the pointer
+    /// resting on the topmost row of the display reports exactly
+    /// `screen.maxY`. Measured on this machine (3440x1440 external display,
+    /// 30pt menu bar) by warping the cursor: Quartz y=0 gives
+    /// `NSEvent.mouseLocation.y == 1440.0 == frame.maxY`, which a rect ending
+    /// at 1440 does not contain, while y=1 gives 1439.0, which it does. That
+    /// was a one-point dead band along the very edge the pointer is thrown at
+    /// — slam it to the top of the display and the notch went dead, back it
+    /// off a pixel and it opened (decision 096). The overshoot covers space
+    /// the pointer cannot otherwise reach, so it makes no other target bigger.
+    private static func topAnchoredRegion(width: CGFloat, height: CGFloat) -> NSRect {
+        let screen = screenFrame
+        return NSRect(
+            x: screen.midX - width / 2,
+            y: screen.maxY - height,
+            width: width,
+            height: height + 1
+        )
+    }
+
     /// Screen-coordinate region (origin bottom-left, matching
     /// `NSEvent.mouseLocation`) in which a dragged file opens the shelf.
     /// Recomputed per event so it follows the notch across displays
     /// (decision 037).
     static var dragActivationRegion: NSRect {
-        let screen = screenFrame
-        let width = pillWidth + dragActivationMargin * 2
-        let height = notchHeight + dragActivationMargin
-        return NSRect(
-            x: screen.midX - width / 2,
-            y: screen.maxY - height,
-            width: width,
-            height: height
+        topAnchoredRegion(
+            width: pillWidth + dragActivationMargin * 2,
+            height: notchHeight + dragActivationMargin
         )
     }
 
     /// Screen-coordinate region (origin bottom-left, matching
     /// `NSEvent.mouseLocation`) that opens the notch when the collapsed strip
-    /// is not drawn (decision 055).
+    /// is not drawn (decision 055): the menu bar's own row, `notchWidth` wide
+    /// and `height` tall, where `height` is the bar as the caller measured it
+    /// (plus `topAnchoredRegion`'s one-point overshoot above the screen edge).
     ///
-    /// Exactly where the pill *would* be if it were drawn — same width, same
-    /// height, same place — so the target is "the notch is still there, you
-    /// just can't see it" rather than a second, differently-shaped hot zone.
-    /// `pillWidth` and not the live `collapsedWidth`, so the target does not
-    /// shrink to the bare notch when the media UI goes idle (decision 038):
-    /// an invisible target that silently changes size is unusable.
-    static var hoverActivationRegion: NSRect {
-        let screen = screenFrame
-        return NSRect(
-            x: screen.midX - pillWidth / 2,
-            y: screen.maxY - stripHeight,
-            width: pillWidth,
-            height: stripHeight
-        )
+    /// Not where the pill *would* be — an invisible 32pt-tall, `pillWidth`-wide
+    /// slab opened the panel whenever the pointer passed near the top of the
+    /// display (decision 090) — and no longer the 3pt edge band that replaced
+    /// it either: 3pt was too tight to *hold*, so relaxing the pointer a pixel
+    /// after the menu bar dropped cancelled the dwell or collapsed the panel
+    /// a frame after it opened (decision 095). What keeps this honest is not
+    /// the height but `MenuBarSensor` — the caller opens only while the bar is
+    /// fully down, and a bar that is down covers whatever was underneath it.
+    ///
+    /// `notchWidth` and not the live `collapsedWidth`, so the target does not
+    /// change size with the media UI (decision 038): an invisible target that
+    /// silently resizes is unusable.
+    static func hoverActivationRegion(height: CGFloat) -> NSRect {
+        topAnchoredRegion(width: notchWidth, height: height)
     }
 
     /// Screen-coordinate region the expanded panel occupies right now — what
@@ -227,14 +249,8 @@ enum NotchGeometry {
     /// the same content-measured target the hit region uses, so it tracks a
     /// panel whose sections have appeared or disappeared.
     static var expandedPanelRegion: NSRect {
-        let screen = screenFrame
         let size = NotchHitRegion.shared.expandedTarget
-        return NSRect(
-            x: screen.midX - size.width / 2,
-            y: screen.maxY - size.height,
-            width: size.width,
-            height: size.height
-        )
+        return topAnchoredRegion(width: size.width, height: size.height)
     }
 
     static var screenFrame: NSRect {

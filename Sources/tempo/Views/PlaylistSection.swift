@@ -81,6 +81,7 @@ struct PlaylistSection: View {
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+            .pointingHandCursor()
             .frame(maxWidth: .infinity)
             // Same highlight language as the transport buttons: a resting plate
             // so the control is findable at all, then on hover the buttons' own

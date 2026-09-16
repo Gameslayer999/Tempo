@@ -390,3 +390,58 @@ enum NotchAccent {
         component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
     }
 }
+
+// MARK: - Pointer
+
+/// Turns the pointer into a hand over a control.
+///
+/// The panel's controls draw no chrome at rest — the transport glyphs, the
+/// gear, the shelf's remove button and the device chips are bare until the
+/// pointer is already on them, so hovering is how you *discover* they are
+/// controls at all. The cursor is the one cue that arrives before the hover
+/// highlight does.
+///
+/// macOS 15's `pointerStyle` is the right mechanism where it exists, because
+/// the system owns the cursor's lifetime: a control that disappears out from
+/// under the pointer — the shelf's remove button, or the whole panel on
+/// collapse — cannot strand a hand cursor on the desktop. The macOS 14
+/// fallback pushes and pops `NSCursor` itself and unwinds on disappear, which
+/// is exactly the case that would otherwise leave it stuck.
+///
+/// Deliberately *not* applied to the Settings window: those are standard
+/// AppKit controls, and on macOS the arrow over a real button is the platform
+/// convention (the hand means "link"). This is for Tempo's own chrome-less
+/// surfaces, where the convention has nothing to work with.
+struct PointingHandCursor: ViewModifier {
+    @State private var pushed = false
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.pointerStyle(.link)
+        } else {
+            content
+                .onHover { inside in
+                    if inside {
+                        guard !pushed else { return }
+                        NSCursor.pointingHand.push()
+                        pushed = true
+                    } else {
+                        popIfPushed()
+                    }
+                }
+                .onDisappear { popIfPushed() }
+        }
+    }
+
+    private func popIfPushed() {
+        guard pushed else { return }
+        NSCursor.pop()
+        pushed = false
+    }
+}
+
+extension View {
+    /// Pointer becomes a hand over this control. See `PointingHandCursor`.
+    func pointingHandCursor() -> some View { modifier(PointingHandCursor()) }
+}

@@ -23,6 +23,7 @@ final class Preferences: ObservableObject {
         static let favoritePlaylists = "favoritePlaylists"
         static let panelStyle = "panelStyle"
         static let hoverExpandDelayMS = "hoverExpandDelayMS"
+        static let edgeHoldDelayMS = "edgeHoldDelayMS"
         static let showFileShelf = "showFileShelf"
         static let showAudioOutput = "showAudioOutput"
         static let showStripOnExternalDisplays = "showStripOnExternalDisplays"
@@ -202,6 +203,21 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(hoverExpandDelayMS, forKey: Key.hoverExpandDelayMS) }
     }
 
+    /// Dwell, in milliseconds, before the *undrawn* strip opens — the hold at
+    /// the very top edge of a notchless display with the strip switched off
+    /// (decisions 055, 090, 093). Separate from `hoverExpandDelayMS` because
+    /// it is a different gesture with a different right answer: hovering a
+    /// drawn pill wants to feel instant, while pushing into a screen edge is
+    /// deliberate and wants room to be held. Capped at 150ms all the same —
+    /// the user's judgement, and nothing past it is a hold anyone would
+    /// choose (decision 094).
+    ///
+    /// This is the hold *after* the menu bar has finished dropping, which
+    /// decision 091 already requires — the two add up in use.
+    @Published var edgeHoldDelayMS: Double {
+        didSet { defaults.set(edgeHoldDelayMS, forKey: Key.edgeHoldDelayMS) }
+    }
+
     /// Playlists to offer in the notch picker, chosen in Settings ▸ Music.
     /// Empty means "no choice made" and every writable playlist is offered, so
     /// the feature works before anyone visits Settings. Order is the order the
@@ -362,6 +378,10 @@ final class Preferences: ObservableObject {
     static let minHoverExpandDelayMS: Double = 0
     static let maxHoverExpandDelayMS: Double = 400
 
+    static let defaultEdgeHoldDelayMS: Double = 60
+    static let minEdgeHoldDelayMS: Double = 0
+    static let maxEdgeHoldDelayMS: Double = 150
+
     static let defaultAlbumGlowStrength: Double = 0.55
 
     static let defaultSneakPeekSeconds: Double = 3
@@ -405,6 +425,7 @@ final class Preferences: ObservableObject {
             Key.showAgentStats: true,
             Key.collapsedAgentLight: CollapsedAgentLightMode.summary.rawValue,
             Key.hoverExpandDelayMS: Self.defaultHoverExpandDelayMS,
+            Key.edgeHoldDelayMS: Self.defaultEdgeHoldDelayMS,
             Key.showFileShelf: true,
             Key.showAudioOutput: true,
             Key.showStripOnExternalDisplays: true,
@@ -453,6 +474,8 @@ final class Preferences: ObservableObject {
         // outside the slider's range would otherwise make the notch unusable.
         hoverExpandDelayMS = min(max(defaults.double(forKey: Key.hoverExpandDelayMS), Self.minHoverExpandDelayMS),
                                  Self.maxHoverExpandDelayMS)
+        edgeHoldDelayMS = min(max(defaults.double(forKey: Key.edgeHoldDelayMS), Self.minEdgeHoldDelayMS),
+                              Self.maxEdgeHoldDelayMS)
         favoritePlaylistIDs = defaults.stringArray(forKey: Key.favoritePlaylists) ?? []
 
         accentSource = AccentSource(rawValue: defaults.string(forKey: Key.accentSource) ?? "")

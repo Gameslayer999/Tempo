@@ -75,6 +75,7 @@ struct NotchButtonStyle: ButtonStyle {
                 .animation(NotchButtonStyle.hoverAnimation, value: isHovered)
                 .animation(.smooth(duration: 0.12), value: configuration.isPressed)
                 .onHover { isHovered = $0 }
+                .pointingHandCursor()
         }
 
         private var scaleFactor: CGFloat {
