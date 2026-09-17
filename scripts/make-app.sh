@@ -38,6 +38,14 @@ fi
 
 echo "==> Building ${EXECUTABLE_NAME} (release)…"
 
+# Same SDK selection scripts/build.sh uses. Plain `swift build` targets the
+# newest installed SDK, and since the macOS 27 SDK that needs a compiler plugin
+# only Xcode ships (decision 098) — so on a Command-Line-Tools-only machine this
+# script could not build at all, while scripts/build.sh could. The fix was
+# applied to one of the two and not the other (decision 099).
+SDK="$("$SCRIPT_DIR/select-sdk.sh")" || exit 1
+export SDKROOT="$SDK"
+
 MAX_ATTEMPTS=3
 ATTEMPT=1
 BUILD_LOG="$(mktemp)"

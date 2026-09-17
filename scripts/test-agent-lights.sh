@@ -18,6 +18,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+export SDKROOT="${SDKROOT:-$(scripts/select-sdk.sh)}"
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-${TMPDIR:-/tmp}/tempo-clang-module-cache}"
+
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/tempo-reconcile.XXXXXX")"
 trap 'rm -rf "$FIX"' EXIT
 mkdir -p "$FIX/status/sessions" "$FIX/sessions" "$FIX/jobs/jobF" "$FIX/jobs/jobG"
@@ -37,8 +40,8 @@ import sys
 fix = sys.argv[1]
 src = open("Sources/tempo/Services/AgentStatusService.swift").read()
 subs = [
-    ('FileManager.default.homeDirectoryForCurrentUser\n            .appendingPathComponent(".claude/status/sessions", isDirectory: true)',
-     f'URL(fileURLWithPath: "{fix}/status/sessions", isDirectory: true)'),
+    ('let home = FileManager.default.homeDirectoryForCurrentUser\n        return [\n            home.appendingPathComponent(".claude/status/sessions", isDirectory: true),\n            home.appendingPathComponent(".codex/status/sessions", isDirectory: true),\n        ]',
+     f'return [URL(fileURLWithPath: "{fix}/status/sessions", isDirectory: true)]'),
     ('FileManager.default.homeDirectoryForCurrentUser\n            .appendingPathComponent(".claude/sessions", isDirectory: true)',
      f'URL(fileURLWithPath: "{fix}/sessions", isDirectory: true)'),
     ('FileManager.default.homeDirectoryForCurrentUser\n            .appendingPathComponent(".claude/jobs/\\(jobID)/state.json")',

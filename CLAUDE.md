@@ -50,7 +50,7 @@ AgentStatus lights) in the notch.
   glance without expanding.
 - **Non-intrusive** — a slim always-on-top panel that stays out of the way; expanded
   view opens on click and collapses when dismissed.
-- **Self-contained & scriptable** — builds with `swift build` (SwiftPM, no Xcode
+- **Self-contained & scriptable** — builds with `scripts/build.sh` (SwiftPM, no Xcode
   project); no manual setup steps beyond the documented one-time Spotify Developer
   Client ID.
 

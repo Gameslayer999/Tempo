@@ -4,10 +4,18 @@ A dynamic notch for macOS — in the spirit of boringNotch and NotchNook — tha
 the MacBook notch into a glanceable surface for **music** and **live AI-agent
 session status**.
 
-> **Status: pre-alpha.** The v1 feature set plus the 2026-08-20 core rework
-> (real audio visualizer, usage graph, Dynamic-Island pill, click-reliability fix),
-> the Settings window, the first-run hello and the lock-screen cards build clean
-> and are awaiting live user verification. See `NEXT_STEPS.md`.
+> **Status: pre-alpha — v0.4.** Everything described below is implemented and
+> builds clean with `scripts/build.sh` on macOS 14+ (Apple silicon, developed on
+> macOS 26). It has only ever run on one Mac, and there are no tests: treat it as
+> something to read and build, not something to depend on. Several features are
+> written and compiling but **have not yet been watched on screen** — the
+> two-player pause rows, the session-finish peek, the lock-screen cards, the
+> album-glow strength curve, full-screen hiding, the pinned-display picker, and
+> capture exclusion. `NEXT_STEPS.md` names exactly what is unverified and how to
+> check it; `DECISIONS.md` records why every choice was made.
+>
+> Distribution is source-only. There is no signed or notarized download, so
+> build it yourself — see **Building**.
 
 ## What it does (v1)
 
@@ -44,6 +52,14 @@ wider than its content:
   panel style set to Solid). It is drawn over whatever is behind it and takes
   no clicks. Length is adjustable, and it stays out of the way while the panel
   is already open.
+- **the same flash when a Claude Code session finishes** — the moment a session
+  goes from working to done, the folder it's in and what it was working on flash
+  under the notch for five seconds and retract, in the same glass capsule, with
+  a white check beside them. It's the answer to "is it done yet" without
+  switching windows: nothing opens, nothing takes focus, and there is no sound.
+  Only a turn that actually ended raises it — a turn you interrupted doesn't —
+  and nothing flashes while the panel is already open, where that session's own
+  row is on screen anyway. On by default; switch it off in Settings ▸ Agents.
 
 When nothing has actually played for a minute — paused and forgotten, or no
 player running at all — the media UI switches off: the cover, the visualizer and the
@@ -80,6 +96,20 @@ column:
   to jump to that point in the song**; the track jumps when you let go.
   Scrubbing inside the player's own window is reflected here within about half
   a second, because macOS pushes the new position to Tempo as it happens.
+- **what else is playing** — start a YouTube video while Spotify is going and
+  both play at once; macOS lets every app hold the audio device. When two apps
+  are playing, Tempo lists them under the controls with a pause button each, so
+  you can silence the one you didn't mean to leave running. Turn on
+  Settings ▸ Music ▸ **Pause the previous player when a new one starts** and it
+  happens by itself — the app that was already playing stops as soon as another
+  takes over. It's off by default because it reaches into another app unasked.
+  Tempo can pause any app that answers AppleScript (Spotify, Music, TV,
+  Podcasts, VLC, IINA, QuickTime Player) plus whichever app most recently took
+  over playback — which is how a YouTube tab gets paused. A browser tab that is
+  already playing in the *background* can't be reached by either route, so
+  Tempo leaves it out of the list rather than offering a button that does
+  nothing. The first pause of a given app asks macOS for permission to control
+  it, once.
 - **audio output** — a mute button, a volume slider, and one chip per output
   device: click a chip to switch where sound goes. Tempo only sets the system's
   default output device and its volume; it never sits in the audio path, so it
@@ -106,14 +136,15 @@ column:
   busiest window it has actually measured so you can calibrate it. Counts
   input, cache-creation and output tokens; excludes cache reads, which would
   otherwise swamp every other number.
-- **agent session lights** — one row per open Claude Code session: a state
+- **agent session lights** — one row per open Claude Code or Codex CLI session: a state
   light (🟢 running · 🟠 blocked, needs you · ⚪ finished and not yet seen ·
   hollow grey idle · 🔴 error), the session's folder, and a one-line description
   of what it is working on, so two sessions
   in the same repo are told apart at a glance. With the extra room a row has,
   the light also carries a glyph — `?` blocked, `!` error, a checkmark for
   finished — so the state is legible without relying on its colour. Read from
-  [AgentStatus](https://github.com/Gameslayer999/AgentStatus)'s status files. This is
+  [AgentStatus](https://github.com/Gameslayer999/AgentStatus)'s status files, plus Tempo's
+  Codex hook helper under `scripts/agentstatus-codex-hook.py`. This is
   Tempo's differentiator over other notch apps. Those files record hook *events*,
   so Tempo cross-checks them against Claude Code's own view of each session
   (read-only, and only what a light needs): a turn you interrupt with Ctrl-C or
@@ -123,11 +154,11 @@ column:
   going to the session is what marks it as seen — and lights up again the next
   time that session finishes something. Rows that want you float to the top —
   blocked and errored first, then finished-and-unseen, then running, then idle —
-  so the three rows that show at once are the three worth looking at, and the
-  rest scroll. The description is that session's current prompt, shown in the
+  so the row that wants you is at the top. The list doesn't scroll: the panel
+  grows a row taller per session, up to what the display can show. The description is that session's current prompt, shown in the
   panel only — Tempo never logs it, stores it, or sends it anywhere; switch the
   lights off in Settings ▸ Modules if you would rather it not be on screen.
-  Each row also carries three figures on the right — **context · tokens spent ·
+  Claude Code rows also carry three figures on the right — **context · tokens spent ·
   turn length** (`125k · 581k · 2m14s`), read from Claude Code's own transcript
   for that session. The first is how full its context window is, the second is
   everything it has spent including its subagents', and the third counts up
@@ -137,7 +168,9 @@ column:
   session was opened with — a percentage would be a guess. There is no dollar
   figure for the same reason: Claude Code records no cost, so Tempo would be
   inventing one. Switch the figures off in Settings ▸ Modules and Tempo stops
-  reading the transcripts entirely.
+  reading the transcripts entirely. Codex rows skip those figures because
+  Codex documents its transcript path as a convenience rather than a stable
+  hook interface.
   **Click a row to go to that session**: a terminal session raises the tab it is running in (Terminal.app
   matched by tty, Ghostty by session title — or, for a session Claude has not
   titled yet, by the tab's working directory), a VS Code or Cursor session
@@ -148,6 +181,25 @@ column:
   most reliable jump; without it editors are still reached through their CLI and
   terminals through app-level focus.
 - a **gear in the top-right corner** opens Settings (below).
+
+Codex CLI lights use Codex's official hook events. Point Codex at Tempo's helper
+from `~/.codex/hooks.json`, substituting the absolute path to your own clone —
+Codex does not expand `~` or resolve relative paths in a hook command:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "/absolute/path/to/Tempo/scripts/agentstatus-codex-hook.py" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/absolute/path/to/Tempo/scripts/agentstatus-codex-hook.py" }] }],
+    "PreToolUse": [{ "hooks": [{ "type": "command", "command": "/absolute/path/to/Tempo/scripts/agentstatus-codex-hook.py" }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "/absolute/path/to/Tempo/scripts/agentstatus-codex-hook.py" }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "/absolute/path/to/Tempo/scripts/agentstatus-codex-hook.py" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "/absolute/path/to/Tempo/scripts/agentstatus-codex-hook.py" }] }],
+    "Interrupt": [{ "hooks": [{ "type": "command", "command": "/absolute/path/to/Tempo/scripts/agentstatus-codex-hook.py" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "/absolute/path/to/Tempo/scripts/agentstatus-codex-hook.py" }] }]
+  }
+}
+```
 
 The expanded panel is rimmed with a soft glass edge so it reads as a distinct
 surface over whatever is behind it, and its material is yours to pick — see
@@ -320,11 +372,19 @@ Agents — so a pane is found by colour before it is read.
   changes, without opening the panel, for as long as its slider says. *Keep
   media showing* sets how long after playback stops the notch keeps showing the
   media wings — 60 seconds by default, because a pause to take a call is not
-  the end of listening; 0 keeps them up indefinitely.
+  the end of listening; 0 keeps them up indefinitely. *Pause the previous
+  player when a new one starts* is the automatic half of the "what else is
+  playing" list above — off by default, and it only acts on apps Tempo can
+  address by name.
 - **Agents** — the agent session lights and the token/timing figures on those
   rows, and **Agent light**, which picks what the *collapsed* pill shows: a
   summary dot (the default), one dot per session, or nothing. Switching the
   figures off stops every transcript read.
+
+  *Finish peek* — **Flash a session when it finishes**, on by default, is the
+  five-second card described above. It's independent of the lights: it's a
+  signal in the collapsed notch, like the pill's own dot, so turning the panel's
+  list off doesn't stop it.
 
   *Usage* adds two opt-in surfaces, both off by default because they read every
   project's transcripts rather than one session's. **Token history** shows the
@@ -449,8 +509,23 @@ automatically and checks the mechanism still works on your macOS version,
 failing the build with a clear message rather than shipping a silently empty
 notch. There is nothing to install.
 
+### Building
+
+Build with **`scripts/build.sh`** (`scripts/build.sh -c release` for a release
+build); `scripts/make-app.sh` uses it too. It takes the same arguments as
+`swift build` and exists because bare `swift build` targets the newest SDK
+installed, which may not be one your machine can compile SwiftUI against — the
+macOS 27 SDK turned `@State` into a macro whose compiler plugin ships only
+inside Xcode, so on a Command-Line-Tools-only Mac every SwiftUI file fails with
+`plugin for module 'SwiftUIMacros' not found`. `scripts/select-sdk.sh` probes
+each installed SDK and picks the newest one that actually compiles, caching the
+answer and keeping a copy of that SDK in `~/Library/Developer/Tempo/SDKs`
+(~303MB, copied once) so a toolchain update can't take it away. No SDK version
+is hardcoded: install Xcode and the newest SDK is picked up automatically. Run
+`scripts/select-sdk.sh --refresh` to re-probe by hand.
+
 macOS only grants the audio permission to a signed `.app` bundle, so the bundled
-launch above is the primary run path. `swift build -c release &&
+launch above is the primary run path. `scripts/build.sh -c release &&
 .build/release/tempo` still works for development, but the bare binary always
 gets the fallback visualizer (the OS silently delivers it zeroed audio). Note:
 the bundle is ad-hoc signed unless an Apple Development identity is in your
@@ -489,8 +564,9 @@ Spotify account page).
 
 ## Privacy
 
-- Tempo is **read-only** on `~/.claude/` — it never writes to, modifies, or
-  installs anything into your Claude Code setup.
+- Tempo is **read-only** on `~/.claude/` and `~/.codex/` — it never writes to,
+  modifies, or installs anything into your Claude Code or Codex setup. The
+  optional Codex hook helper is installed by you, outside Tempo.
 - The token and timing figures read Claude Code's session transcripts under
   `~/.claude/projects/`, and take **numbers and timestamps only**: token counts,
   a turn's start, a turn's duration. No message, prompt or tool output is read

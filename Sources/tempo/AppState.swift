@@ -46,6 +46,12 @@ final class AppState: ObservableObject {
     /// (a notification, a poll, a seek) touches state.
     @Published var progress: PlaybackProgress? = nil
     @Published var sessions: [AgentSession] = []
+    /// The most recent turn a session was seen finishing (decision 100),
+    /// published by `AgentStatusService` at the instant it observes the
+    /// running -> idle transition. An *event*, not a state: the peek keys off
+    /// the change, so it is never cleared and the value left behind after the
+    /// card fades means nothing.
+    @Published var lastAgentFinish: AgentFinish?
     /// Token and timing figures per session id, read from Claude Code's own
     /// transcripts by `SessionStatsService` (decision 048). Keyed separately
     /// from `sessions` rather than folded into `AgentSession` because the two
@@ -160,6 +166,19 @@ struct PlaybackProgress: Equatable {
         guard duration > 0 else { return 0 }
         return position(at: date) / duration
     }
+}
+
+/// One session observed finishing a turn — what the notch peek is raised from
+/// (decision 100). It carries the same two strings the session's panel row
+/// already draws and nothing more: the task excerpt is rendered in the card and
+/// nowhere else, never logged and never written (Agent Guideline #5).
+struct AgentFinish: Equatable {
+    var sessionID: String
+    var label: String
+    var task: String
+    /// When the finish was observed. This is what makes two consecutive turns
+    /// of the same session two distinct events rather than one.
+    var at: Date
 }
 
 struct AgentSession: Identifiable, Equatable {

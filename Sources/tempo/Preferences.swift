@@ -20,12 +20,14 @@ final class Preferences: ObservableObject {
         static let showAgentLights = "showAgentLights"
         static let showAgentStats = "showAgentStats"
         static let collapsedAgentLight = "collapsedAgentLight"
+        static let agentFinishPeek = "agentFinishPeek"
         static let favoritePlaylists = "favoritePlaylists"
         static let panelStyle = "panelStyle"
         static let hoverExpandDelayMS = "hoverExpandDelayMS"
         static let edgeHoldDelayMS = "edgeHoldDelayMS"
         static let showFileShelf = "showFileShelf"
         static let showAudioOutput = "showAudioOutput"
+        static let autoPausePreviousPlayer = "autoPausePreviousPlayer"
         static let showStripOnExternalDisplays = "showStripOnExternalDisplays"
         static let showLockScreenCards = "showLockScreenCards"
         static let lockCardShowsWeather = "lockCardShowsWeather"
@@ -68,6 +70,15 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(showAgentLights, forKey: Key.showAgentLights) }
     }
 
+    /// Whether a session finishing its turn flashes a card under the notch
+    /// (decision 100). Independent of `showAgentLights`, like
+    /// `collapsedAgentLight`: this is a signal in the *collapsed* notch, and
+    /// switching off the expanded panel's list is not a request to stop being
+    /// told a turn ended.
+    @Published var agentFinishPeek: Bool {
+        didSet { defaults.set(agentFinishPeek, forKey: Key.agentFinishPeek) }
+    }
+
     /// Whether the agent rows carry token and timing figures (decision 048).
     /// Separate from `showAgentLights` because it is the one module that reads
     /// a *second* data source — Claude Code's transcripts — and switching it
@@ -87,6 +98,20 @@ final class Preferences: ObservableObject {
     /// slider (decision 050).
     @Published var showAudioOutput: Bool {
         didSet { defaults.set(showAudioOutput, forKey: Key.showAudioOutput) }
+    }
+
+    /// Whether the app that was already playing gets paused when a different
+    /// one takes over now-playing — Spotify silenced by a YouTube video
+    /// (decision 099).
+    ///
+    /// The one preference in this file that defaults to **off**, and against
+    /// the house rule at the top deliberately: every other switch here decides
+    /// whether Tempo *draws* something, and this one decides whether Tempo
+    /// reaches into another app and stops it without being asked. That is not
+    /// a default anyone should discover by surprise. The panel's own list of
+    /// what is playing works with it off.
+    @Published var autoPausePreviousPlayer: Bool {
+        didSet { defaults.set(autoPausePreviousPlayer, forKey: Key.autoPausePreviousPlayer) }
     }
 
     /// Whether the *collapsed strip* is drawn when the display Tempo hugs has
@@ -424,10 +449,12 @@ final class Preferences: ObservableObject {
             Key.showAgentLights: true,
             Key.showAgentStats: true,
             Key.collapsedAgentLight: CollapsedAgentLightMode.summary.rawValue,
+            Key.agentFinishPeek: true,
             Key.hoverExpandDelayMS: Self.defaultHoverExpandDelayMS,
             Key.edgeHoldDelayMS: Self.defaultEdgeHoldDelayMS,
             Key.showFileShelf: true,
             Key.showAudioOutput: true,
+            Key.autoPausePreviousPlayer: false,
             Key.showStripOnExternalDisplays: true,
             Key.showLockScreenCards: false,
             Key.lockCardShowsWeather: true,
@@ -455,8 +482,10 @@ final class Preferences: ObservableObject {
         showUsageGraph = defaults.bool(forKey: Key.showUsageGraph)
         showAgentLights = defaults.bool(forKey: Key.showAgentLights)
         showAgentStats = defaults.bool(forKey: Key.showAgentStats)
+        agentFinishPeek = defaults.bool(forKey: Key.agentFinishPeek)
         showFileShelf = defaults.bool(forKey: Key.showFileShelf)
         showAudioOutput = defaults.bool(forKey: Key.showAudioOutput)
+        autoPausePreviousPlayer = defaults.bool(forKey: Key.autoPausePreviousPlayer)
         showStripOnExternalDisplays = defaults.bool(forKey: Key.showStripOnExternalDisplays)
         showLockScreenCards = defaults.bool(forKey: Key.showLockScreenCards)
         lockCardShowsWeather = defaults.bool(forKey: Key.lockCardShowsWeather)

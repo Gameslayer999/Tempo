@@ -79,11 +79,36 @@ struct NotchShape: Shape {
 ///   `state.isExpanded` becomes true and it now survives mouse-out.
 /// - A click outside the panel (handled in NotchWindow.swift's global
 ///   monitor) unpins and clears hover, collapsing it.
+/// One transient card raised under the collapsed notch and retracted a few
+/// seconds later: a track change (decision 072) or a session that just finished
+/// a turn (decision 100).
+///
+/// The two share a slot because they share a place on screen — drawn at once
+/// they would overlap, and of two signals arriving together the newer is the
+/// one worth reading.
+struct NotchPeek: Equatable {
+    /// The one line the card exists to say.
+    var title: String
+    /// The line under it — the artist, or what the session was working on. An
+    /// empty string draws no row rather than an empty gap.
+    var subtitle: String
+    /// Leading glyph, for the finish card's light. nil on a track change,
+    /// which is already announced by the artwork in the strip above it.
+    var symbol: String?
+    var tint: Color = .white
+    /// What VoiceOver reads in place of the two lines.
+    var spoken: String
+    /// How long it stays up before retracting.
+    var seconds: Double
+}
+
 struct ContentView: View {
     @ObservedObject var state: AppState
     @ObservedObject var media: MediaRemoteService
     @ObservedObject var shelf: ShelfService
     @ObservedObject var audio: AudioOutputService
+    /// Everything audibly playing that Tempo can pause (decision 099).
+    @ObservedObject var audioSources: AudioSourcesService
     @ObservedObject var api: SpotifyWebAPI
     @ObservedObject var prefs: Preferences
     /// Read by the onboarding setup rows for their live grant state; the
@@ -186,11 +211,11 @@ struct ContentView: View {
     /// therefore spring-animatable — height, and the hit region's expanded
     /// target. The initial value only matters for the first frames of the
     /// very first expansion, before the first measurement lands.
-    /// The track the sneak peek is currently showing, and the timer that
-    /// retracts it (decision 072). Held here rather than in `AppState` because
+    /// What the peek is currently showing, and the timer that retracts it
+    /// (decisions 072, 100). Held here rather than in `AppState` because
     /// nothing outside this view needs it.
-    @State private var sneakPeekTrack: NowPlaying?
-    @State private var sneakPeekTask: Task<Void, Never>?
+    @State private var peek: NotchPeek?
+    @State private var peekTask: Task<Void, Never>?
 
     @State private var expandedContentHeight: CGFloat = 135
 
@@ -385,6 +410,16 @@ struct ContentView: View {
         .onChange(of: state.nowPlaying?.track) { _, track in
             showSneakPeek(for: track)
         }
+        // The process scan runs only while the panel is actually open — it is
+        // read to draw rows, and a collapsed notch draws none (decision 099).
+        .onChange(of: displayedExpanded, initial: true) { _, expanded in
+            audioSources.setScanning(expanded)
+        }
+        // The other thing worth saying without being asked (decision 100): a
+        // session finished. Same card, same place, same rules.
+        .onChange(of: state.lastAgentFinish) { _, finish in
+            showFinishPeek(for: finish)
+        }
         .animation(expandAnimation, value: displayedExpanded)
         // A section appearing/disappearing while the panel is open (playlist
         // connects, an agent session starts) re-measures the content and must
@@ -429,7 +464,7 @@ struct ContentView: View {
         // Below the pill, in the transparent part of the window. It claims no
         // clicks: the window's hit region is the drawn silhouette only, so the
         // peek is pixels over whatever app is behind and nothing more.
-        .overlay(alignment: .top) { sneakPeekView }
+        .overlay(alignment: .top) { peekView }
         // The pointer reaching the place the strip would be, when the strip is
         // not drawn (decision 055). Runs through the same dwell and haptic as
         // a real hover, so the two entry paths cannot feel different — and the
@@ -855,8 +890,8 @@ struct ContentView: View {
         }
     }
 
-    /// What just started playing, under the notch, without opening anything
-    /// (decision 072).
+    /// What just happened, under the notch, without opening anything
+    /// (decisions 072, 100).
     ///
     /// The panel already answers "what's playing" — but only once you have
     /// moved the pointer to the notch and waited out the hover delay. A track
@@ -865,18 +900,29 @@ struct ContentView: View {
     /// the panel is open, where it would be repeating what is already on
     /// screen an inch above it.
     @ViewBuilder
-    private var sneakPeekView: some View {
-        if let peek = sneakPeekTrack, !displayedExpanded {
-            VStack(spacing: NotchMetrics.tightSpacing) {
-                Text(peek.track)
-                    .font(NotchType.title)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                if !peek.artist.isEmpty {
-                    Text(peek.artist)
-                        .font(NotchType.caption)
-                        .foregroundStyle(.secondary)
+    private var peekView: some View {
+        if let peek = peek, !displayedExpanded {
+            HStack(spacing: 8) {
+                if let symbol = peek.symbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(peek.tint)
+                        // The card is the one place an agent signal appears
+                        // with no other light beside it, so the glyph carries
+                        // the same halo the panel's finished light does.
+                        .shadow(color: peek.tint.opacity(0.7), radius: 3)
+                }
+                VStack(spacing: NotchMetrics.tightSpacing) {
+                    Text(peek.title)
+                        .font(NotchType.title)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
+                    if !peek.subtitle.isEmpty {
+                        Text(peek.subtitle)
+                            .font(NotchType.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
             .multilineTextAlignment(.center)
@@ -893,7 +939,7 @@ struct ContentView: View {
                     : .move(edge: .top).combined(with: .opacity)
             )
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Now playing: \(peek.track) by \(peek.artist)")
+            .accessibilityLabel(peek.spoken)
         }
     }
 
@@ -939,36 +985,89 @@ struct ContentView: View {
     /// and 20pt is a hair under half the peek's own height.
     private static let peekCornerRadius: CGFloat = 20
 
-    /// Raises the peek for a new track and schedules its retraction.
+    /// Raises the peek for a new track.
     ///
     /// Only a real change to a *named* track counts. Startup, a stop, and the
     /// artwork arriving a beat after the title all pass through here, and none
-    /// of them is a track change the user needs told about.
+    /// of them is a track change the user needs told about. Anything that is
+    /// not a track change retracts whatever is up, which is what stops a peek
+    /// outliving the thing it announced.
     private func showSneakPeek(for track: String?) {
-        sneakPeekTask?.cancel()
-        sneakPeekTask = nil
-
         guard prefs.sneakPeek,
               let track, !track.isEmpty,
-              let playing = state.nowPlaying,
-              !displayedExpanded
+              let playing = state.nowPlaying
         else {
-            if sneakPeekTrack != nil {
-                withAnimation(.easeOut(duration: 0.2)) { sneakPeekTrack = nil }
-            }
+            retractPeek()
+            return
+        }
+
+        raisePeek(NotchPeek(
+            title: playing.track,
+            subtitle: playing.artist,
+            spoken: "Now playing: \(playing.track) by \(playing.artist)",
+            seconds: prefs.sneakPeekSeconds
+        ))
+    }
+
+    /// How long a finish card stays up. A constant rather than a second
+    /// slider: the two cards are read at different moments — a track change
+    /// while you are already looking at the screen, a finish after you notice
+    /// something moved in the corner of your eye — so the finish wants the
+    /// longer of the two, not a knob of its own.
+    private static let finishPeekSeconds: Double = 5
+
+    /// Raises the peek for a session that just finished a turn (decision 100).
+    ///
+    /// Deliberately does **not** retract on the nil/disabled path, unlike the
+    /// track peek: a switched-off finish card has nothing to say about a track
+    /// card that is currently up.
+    private func showFinishPeek(for finish: AgentFinish?) {
+        guard prefs.agentFinishPeek, let finish else { return }
+
+        let appearance = AgentAppearance(.finished)
+        raisePeek(NotchPeek(
+            title: "\(finish.label) finished",
+            subtitle: finish.task,
+            symbol: "checkmark.circle.fill",
+            tint: appearance.color,
+            spoken: finish.task.isEmpty
+                ? "Agent session \(finish.label) finished"
+                : "Agent session \(finish.label) finished: \(finish.task)",
+            seconds: Self.finishPeekSeconds
+        ))
+    }
+
+    /// Puts a card up and schedules its retraction, replacing whatever was
+    /// there. Suppressed while the panel is open, where the card would repeat
+    /// what is already on screen an inch above it.
+    private func raisePeek(_ next: NotchPeek) {
+        peekTask?.cancel()
+        peekTask = nil
+
+        guard !displayedExpanded else {
+            if peek != nil { withAnimation(.easeOut(duration: 0.2)) { peek = nil } }
             return
         }
 
         withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.34, dampingFraction: 0.82)) {
-            sneakPeekTrack = playing
+            peek = next
         }
 
-        let seconds = prefs.sneakPeekSeconds
-        sneakPeekTask = Task { @MainActor in
+        let seconds = next.seconds
+        peekTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(Int(seconds * 1000)))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.25)) { sneakPeekTrack = nil }
-            sneakPeekTask = nil
+            withAnimation(.easeOut(duration: 0.25)) { peek = nil }
+            peekTask = nil
+        }
+    }
+
+    /// Takes down whatever is up, and cancels its timer.
+    private func retractPeek() {
+        peekTask?.cancel()
+        peekTask = nil
+        if peek != nil {
+            withAnimation(.easeOut(duration: 0.2)) { peek = nil }
         }
     }
 
@@ -997,6 +1096,11 @@ struct ContentView: View {
                     if let progress = state.progress, progress.duration > 0 {
                         PlaybackProgressView(progress: progress) { media.seek(to: $0) }
                     }
+                    // Directly under the transport it qualifies: the controls
+                    // above act on whichever app took over last, and these rows
+                    // are how you reach the other one (decision 099). Draws
+                    // nothing at all unless two apps are playing at once.
+                    AudioSourcesView(sources: audioSources)
                     // Out of the column beside the cover and across the full
                     // content width. In the column it was the tallest thing
                     // there, and since the cover matches the column's height

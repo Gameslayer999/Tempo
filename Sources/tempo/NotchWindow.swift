@@ -7,37 +7,29 @@ import SwiftUI
 /// exactly.
 enum NotchGeometry {
     static let sidePadding: CGFloat = 110
-    /// Window height ceiling. The drawn expanded panel sizes itself to its
-    /// content (sections hide/show — see ContentView.expandedContent) and is
-    /// usually shorter than this; the window just has to be tall enough for
-    /// the fullest case (all sections visible).
+    /// Window height ceiling — the tallest the drawn panel may ever be.
     ///
-    /// The window is never resized, so anything the content lays out below
-    /// this line is outside the window and simply not drawn — the ceiling is
-    /// a hard clip, not a scroll. 280 was the scaffold's figure, from when the
-    /// panel held only the now-playing header; the progress bar, output row,
-    /// file shelf, usage graphs and agent rows added since then push the
-    /// fullest panel past it, so it was losing its bottom sections.
+    /// The window is never resized while the panel animates (that invariant is
+    /// what lets only the SwiftUI content move), so this has to clear the
+    /// fullest case up front. It used to be a constant (680 by decision 063),
+    /// which made every growable section inside the panel responsible for
+    /// bounding itself: anything laid out past the line is outside the window
+    /// and simply not drawn — a hard clip, not a scroll.
     ///
-    /// Every growable section is itself bounded — the agent list caps at three
-    /// scrolling rows, the shelf row and the output-device row scroll
-    /// horizontally — so the fullest case is a fixed figure, and this only has
-    /// to clear it. Measured live: output row + usage graphs + agent rows
-    /// alone lay out at 233pt including the strip; the sections that were not
-    /// on screen at that moment (now-playing header ~113, progress bar ~20,
-    /// shelf row 68, two more agent rows 60, plus 12pt of stack spacing each)
-    /// add ~290pt, for ~525pt in the fullest case.
-    ///
-    /// Raised from 600 to 680 by decision 063, which regrouped the content:
-    /// the media block gained the playlist row that used to be folded into
-    /// the header's column (+~42), lost ~32 of cover height in exchange, and
-    /// a group separator with 16pt of air on each side replaced one 12pt gap
-    /// (+21). Net ~+31, for ~556 in the fullest case. The extra margin is
-    /// free — the window is transparent outside the drawn shape and passes
-    /// clicks through (`NotchHostingView.hitTest`) — and running out of it is
-    /// not a graceful failure: anything laid out past this line is simply
-    /// never drawn, so the bottom section disappears with no other symptom.
-    static let panelHeight: CGFloat = 680
+    /// It is now the target screen's height less `bottomMargin`, because the
+    /// agent list grows a row per session rather than scrolling inside three
+    /// (decision 101), so the ceiling has to be whatever the display can
+    /// actually show rather than a figure picked for one content mix. Costs
+    /// nothing: the window is transparent outside the drawn shape and hands
+    /// those clicks straight through (`NotchHostingView.hitTest`), and the
+    /// panel still draws only as tall as its content
+    /// (`ContentView.currentHeight`). Re-read on every display change through
+    /// `refresh()` / `applyGeometry()`, like every other figure here.
+    static var panelHeight: CGFloat { max(screenFrame.height - bottomMargin, 320) }
+
+    /// Air left between the tallest possible panel and the bottom of the
+    /// screen, so a full-height panel never runs into the screen edge.
+    private static let bottomMargin: CGFloat = 24
 
     /// The screen Tempo hugs, and the notch dimensions read off it.
     ///

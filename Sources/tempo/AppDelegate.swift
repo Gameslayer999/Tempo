@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var media: MediaRemoteService?
     private var shelf: ShelfService?
     private var audio: AudioOutputService?
+    private var audioSources: AudioSourcesService?
     private var dragDetector: DragDetector?
     private var hoverDetector: NotchHoverDetector?
     private var music: MusicService?
@@ -39,6 +40,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let sessionStats = SessionStatsService(state: state)
         let spotifyAPI = SpotifyWebAPI()
         let prefs = Preferences.shared
+        // Holds a closure into `media` for the one route MediaRemote owns, and
+        // `media` holds it weakly back for now-playing handovers (decision 099).
+        let audioSources = AudioSourcesService(prefs: prefs) { [weak media] in
+            media?.pauseNowPlaying()
+        }
+        media.audioSources = audioSources
         let location = LocationService(prefs: prefs)
         let weather = WeatherService(location: location, prefs: prefs)
         let screenLock = ScreenLockService()
@@ -59,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.media = media
         self.shelf = shelf
         self.audio = audio
+        self.audioSources = audioSources
         self.dragDetector = dragDetector
         self.hoverDetector = hoverDetector
         self.music = music
@@ -229,6 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             media: media,
             shelf: shelf,
             audio: audio,
+            audioSources: audioSources,
             api: spotifyAPI,
             prefs: prefs,
             lockCards: lockCards,
@@ -348,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dragDetector?.stop()
         hoverDetector?.stop()
         audio?.stop()
+        audioSources?.stop()
         // Withdraws both cards: leaving them in Notification Center after the
         // app that posted them is gone is a signal with nothing behind it.
         lockCards?.stop()

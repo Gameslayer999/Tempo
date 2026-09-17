@@ -426,7 +426,12 @@ final class SpotifyWebAPI: ObservableObject {
             lastAddError = "Spotify session expired — reconnect in Settings ▸ Music."
             return false
         }
-        guard let url = URL(string: "\(Self.apiBase)/playlists/\(playlistID)/tracks") else { return false }
+        // `/items`, not the deprecated `/tracks`: Spotify's February 2026
+        // migration retired `POST /playlists/{id}/tracks`, and it now answers
+        // 403 `{"error":{"status":403,"message":"Forbidden"}}` for every
+        // caller — owned playlist or not (verified live 2026-09-16 on this
+        // account: `/tracks` 403, `/items` 201 for the same track+playlist).
+        guard let url = URL(string: "\(Self.apiBase)/playlists/\(playlistID)/items") else { return false }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -454,7 +459,11 @@ final class SpotifyWebAPI: ObservableObject {
             struct Inner: Decodable { var message: String? }
             var error: Inner?
         }
-        let detail = (try? JSONDecoder().decode(APIError.self, from: body))?.error?.message
+        var detail = (try? JSONDecoder().decode(APIError.self, from: body))?.error?.message
+        // Spotify's 403 message is the bare word "Forbidden" — echoing it gave
+        // the user "Forbidden" and nothing to act on. Treat a detail that only
+        // restates the status as absent.
+        if let text = detail, text.caseInsensitiveCompare("forbidden") == .orderedSame { detail = nil }
 
         switch status {
         case 401:

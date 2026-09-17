@@ -569,10 +569,11 @@ private struct MusicPane: View {
                     // has to mean the same thing.
                     parse: { $0.lowercased().hasPrefix("n") ? 0 : sliderNumber($0) }
                 )
+                Toggle("Pause the previous player when a new one starts", isOn: $prefs.autoPausePreviousPlayer)
             } header: {
                 Text("Playback")
             } footer: {
-                FooterText("A track change flashes the new title and artist under the collapsed notch and then fades. It never expands the panel and never takes focus; hovering the notch still opens it as usual.\n\n“Paused media stays up” is how long after playback stops the artwork, visualizer and controls remain before Tempo stops treating media as active. A pause to take a call, a scrub, or an app switch is a gap in listening, not the end of it — which is why this is a slider and not the fixed 60 seconds it used to be. At the far left it never times out, and the media UI stays until the player itself goes away.")
+                FooterText("A track change flashes the new title and artist under the collapsed notch and then fades. It never expands the panel and never takes focus; hovering the notch still opens it as usual.\n\n“Paused media stays up” is how long after playback stops the artwork, visualizer and controls remain before Tempo stops treating media as active. A pause to take a call, a scrub, or an app switch is a gap in listening, not the end of it — which is why this is a slider and not the fixed 60 seconds it used to be. At the far left it never times out, and the media UI stays until the player itself goes away.\n\nStart a YouTube video while Spotify is playing and both play at once — macOS lets every app hold the audio device. With the last switch on, the app that was already playing is paused as soon as another one takes over. It is off by default because it reaches into another app and stops it without being asked.\n\nIt can only pause an app that answers AppleScript — Spotify, Music, TV, Podcasts, VLC, IINA and QuickTime Player. A browser tab that is already playing in the background cannot be reached at all, so Tempo leaves it alone rather than appearing to act. Either way, whenever two apps are playing the panel lists them under the controls with a pause button each, and that list works with this switch off.\n\nThe first pause of a given app asks for permission to control it; macOS remembers the answer.")
             }
 
             Section {
@@ -999,7 +1000,15 @@ private struct AgentsPane: View {
             } header: {
                 Text("Session lights")
             } footer: {
-                FooterText("One light per open Claude Code session in the expanded panel, read from the status files under ~/.claude/status — Tempo only ever reads them, and installs no hooks of its own.\n\nThe figures put each session's context size, total tokens spent and turn length on its row, read from Claude Code's own transcripts. Switching them off stops those reads entirely.\n\n\(prefs.collapsedAgentLight.detail)")
+                FooterText("One light per open Claude Code or Codex CLI session in the expanded panel, read from status files under ~/.claude/status and ~/.codex/status — Tempo only ever reads them, and installs no hooks of its own.\n\nThe figures put each Claude Code session's context size, total tokens spent and turn length on its row. Codex rows skip those figures because Codex does not document its transcript format as a stable hook interface. Switching the figures off stops those transcript reads entirely.\n\n\(prefs.collapsedAgentLight.detail)")
+            }
+
+            Section {
+                Toggle("Flash a session when it finishes", isOn: $prefs.agentFinishPeek)
+            } header: {
+                Text("Finish peek")
+            } footer: {
+                FooterText("A session going from running to idle flashes its folder and what it was working on under the collapsed notch for five seconds, then fades \u{2014} the same card a track change raises. It never expands the panel, never takes focus and plays no sound.\n\nOnly a turn that really ended raises it: an interrupted turn is not a finish, and nothing is announced while the panel is open, where that session's own row is already on screen.\n\nIndependent of the lights above \u{2014} like the collapsed pill's dot, this is a signal in the notch rather than a row in the panel.")
             }
 
             Section {

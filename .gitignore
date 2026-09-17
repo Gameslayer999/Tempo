@@ -20,5 +20,9 @@ logs/
 config.json
 tokens.json
 
+# Python bytecode (scripts/agentstatus-codex-hook.py)
+__pycache__/
+*.pyc
+
 # OS
 .DS_Store

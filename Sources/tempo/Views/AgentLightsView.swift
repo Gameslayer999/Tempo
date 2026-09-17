@@ -18,15 +18,34 @@ struct AgentLightsView: View {
     /// caller (ContentView), which owns the expansion state.
     var onFocus: (AgentSession) -> Void
 
-    /// Rows visible before the list scrolls, and the row metrics used to turn
-    /// that count into a height. 28pt is `NotchButtonStyle`'s minimum hit
-    /// target, which is what sets a row's height.
-    private static let visibleRows = 3
+    /// Row metrics. 28pt is `NotchButtonStyle`'s minimum hit target, which is
+    /// what sets a row's height.
     private static let rowHeight: CGFloat = 28
     private static let rowSpacing: CGFloat = 2
 
+    /// Height the rest of the fullest expanded panel occupies above this
+    /// section — now-playing header, progress bar, playlist row, separator,
+    /// output row, shelf, usage graphs, and this section's own "Agents"
+    /// header. Measured at ~468pt (decision 063's fullest-case figure of
+    /// ~556pt less the three agent rows it included); rounded up to 520 so a
+    /// section growing by a few points can't start clipping rows.
+    private static let reservedForRestOfPanel: CGFloat = 520
+
+    /// How many rows the display can actually show before the panel would run
+    /// past the window (`NotchGeometry.panelHeight`, itself the screen height
+    /// less a margin). The list grows a row per session up to this; beyond it
+    /// the remainder scrolls, because clipping is the alternative and a row
+    /// laid out below the window is never drawn at all. Floored at three —
+    /// the old fixed count — so an unusually short display is no worse than
+    /// before.
+    private var maxRows: Int {
+        let available = NotchGeometry.panelHeight - Self.reservedForRestOfPanel
+        let rows = Int((available + Self.rowSpacing) / (Self.rowHeight + Self.rowSpacing))
+        return max(rows, 3)
+    }
+
     private var listHeight: CGFloat {
-        let shown = min(sessions.count, Self.visibleRows)
+        let shown = min(sessions.count, maxRows)
         return CGFloat(shown) * Self.rowHeight
             + CGFloat(max(shown - 1, 0)) * Self.rowSpacing
     }
@@ -49,8 +68,10 @@ struct AgentLightsView: View {
                         }
                     }
                 }
-                // Caps the feature at three rows so a busy machine can't grow
-                // the expanded panel without bound; the rest scrolls.
+                // Exactly the rows' own height up to `maxRows`, so the panel
+                // grows with the session count instead of scrolling inside a
+                // fixed window (decision 101). Only a machine with more live
+                // sessions than the display can show ever scrolls here.
                 .frame(height: listHeight)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

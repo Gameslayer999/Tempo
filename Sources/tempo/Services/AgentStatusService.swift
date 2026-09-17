@@ -1,9 +1,9 @@
 import Foundation
 
-/// Read-only consumer of AgentStatus's session status files (decision 005).
+/// Read-only consumer of AgentStatus-shaped session status files (decision 005).
 ///
-/// Tempo never writes to, deletes, or locks anything under `~/.claude/**` —
-/// this service only opens files for reading. If the status directory is
+/// Tempo never writes to, deletes, or locks anything under `~/.claude/**` or
+/// `~/.codex/**` — this service only opens files for reading. If the status directory is
 /// absent or unreadable, the lights feature hides itself silently (Agent
 /// Guideline #3): `state.sessions` is simply set to `[]`.
 ///
@@ -30,9 +30,12 @@ final class AgentStatusService: ObservableObject {
     /// lying light (UI Principle #4).
     private static let staleAfter: TimeInterval = 2 * 60 * 60
 
-    private static var sessionsDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/status/sessions", isDirectory: true)
+    private static var sessionDirectories: [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            home.appendingPathComponent(".claude/status/sessions", isDirectory: true),
+            home.appendingPathComponent(".codex/status/sessions", isDirectory: true),
+        ]
     }
 
     /// Claude Code's own per-process session records — the second source
@@ -95,37 +98,36 @@ final class AgentStatusService: ObservableObject {
 
     private func poll() {
         let fm = FileManager.default
-        let dir = Self.sessionsDirectory
-
-        var isDirectory: ObjCBool = false
-        guard fm.fileExists(atPath: dir.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            setSessions([])
-            return
-        }
-
-        guard let entries = try? fm.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else {
-            setSessions([])
-            return
-        }
-
         let now = Date()
         var parsed: [AgentSession] = []
+        var sawDirectory = false
 
-        for url in entries {
-            // Only plain "<id>.json" session files — skip "<id>.subagents"
-            // marker directories and anything else (e.g. .DS_Store).
-            guard url.pathExtension == "json" else { continue }
+        for dir in Self.sessionDirectories {
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: dir.path, isDirectory: &isDirectory), isDirectory.boolValue,
+                  let entries = try? fm.contentsOfDirectory(
+                      at: dir,
+                      includingPropertiesForKeys: nil,
+                      options: [.skipsHiddenFiles]
+                  ) else { continue }
+            sawDirectory = true
 
-            let id = url.deletingPathExtension().lastPathComponent
-            guard let data = try? Data(contentsOf: url) else { continue }
-            guard let session = Self.parseSession(id: id, data: data) else { continue }
-            guard now.timeIntervalSince(session.updatedAt) < Self.staleAfter else { continue }
+            for url in entries {
+                // Only plain "<id>.json" session files — skip "<id>.subagents"
+                // marker directories and anything else (e.g. .DS_Store).
+                guard url.pathExtension == "json" else { continue }
 
-            parsed.append(session)
+                let id = url.deletingPathExtension().lastPathComponent
+                guard let data = try? Data(contentsOf: url) else { continue }
+                guard let session = Self.parseSession(id: id, data: data) else { continue }
+                guard now.timeIntervalSince(session.updatedAt) < Self.staleAfter else { continue }
+
+                parsed.append(session)
+            }
+        }
+        guard sawDirectory else {
+            setSessions([])
+            return
         }
 
         // The CLI listing is consulted for exactly two things — what a background
@@ -169,6 +171,7 @@ final class AgentStatusService: ObservableObject {
             // session. Claude Desktop is excluded by its data rather than by a
             // rule — it writes no `status`, so `turnEnded` reads no evidence.
             if session.ide != "cursor",
+               !session.ide.hasPrefix("codex"),
                session.state == "running",
                fact?.kind != "background",
                Self.turnEnded(records[session.id], lightUpdatedAt: session.updatedAt) {
@@ -300,10 +303,28 @@ final class AgentStatusService: ObservableObject {
         lastStates = lastStates.filter { liveIDs.contains($0.key) }
         finishedAt = finishedAt.filter { liveIDs.contains($0.key) }
 
+        var announced = false
         return sessions.map { session in
             if lastStates[session.id] == "running", session.state == "idle",
                !reconciledIdle.contains(session.id) {
                 finishedAt[session.id] = now
+                // The peek's event (decision 100). Published here rather than
+                // derived from `justFinished` downstream because this is the
+                // one place the *transition* exists — the flag that follows it
+                // stays true for the whole finished window, which is a state,
+                // not a moment to announce. Two sessions finishing inside one
+                // poll raise the first: there is a single card, so the second
+                // would replace it in the same frame, and a card that never
+                // rendered is not worth queueing.
+                if !announced {
+                    announced = true
+                    state.lastAgentFinish = AgentFinish(
+                        sessionID: session.id,
+                        label: session.label,
+                        task: session.task,
+                        at: now
+                    )
+                }
             }
             lastStates[session.id] = session.state
 

@@ -31,6 +31,11 @@ import Foundation
 final class MediaRemoteService: ObservableObject {
     let state: AppState
 
+    /// Told about every now-playing handover so it can route a row's pause and
+    /// run the auto-pause rule (decision 099). Weak because that service holds
+    /// a closure back into this one; set by `AppDelegate` after both exist.
+    weak var audioSources: AudioSourcesService?
+
     /// MRCommand IDs, as documented by the adapter's `send` command.
     private enum Command: Int {
         case play = 0
@@ -343,6 +348,12 @@ final class MediaRemoteService: ObservableObject {
     // MARK: - Transport
 
     func playPause() { send(.togglePlayPause) }
+
+    /// Pauses whichever app currently holds now-playing — the only app
+    /// MediaRemote can address. `AudioSourcesService` calls this for a row
+    /// whose route is `.mediaRemote`; everything else there is paused by name
+    /// over AppleScript (decision 099).
+    func pauseNowPlaying() { send(.pause) }
     func nextTrack() { send(.nextTrack) }
     func previousTrack() { send(.previousTrack) }
 
@@ -418,6 +429,14 @@ final class MediaRemoteService: ObservableObject {
         guard state.nowPlaying != next else { return }
         state.nowPlaying = next
         updateMediaActivity(playing: next?.isPlaying == true)
+        // Normalised to nil: `sourceBundleID` is "" when the payload carried
+        // no bundle identifier, and an empty string there would read as a real
+        // app that no row could ever match.
+        let source = next?.sourceBundleID
+        audioSources?.nowPlayingChanged(
+            bundleID: (source?.isEmpty == false) ? source : nil,
+            isPlaying: next?.isPlaying == true
+        )
         tempoDebug("nowPlaying playing=\(next?.isPlaying == true) hasTrack=\(next != nil) source=\(next?.sourceBundleID ?? "-") mediaActive=\(state.isMediaActive)")
 
         if next == nil {

@@ -9,6 +9,7 @@ import Foundation
 /// | `ide` | Where the click goes |
 /// |---|---|
 /// | `cli` | the terminal tab running it — Terminal.app matched by tty, Ghostty by session title; otherwise the emulator instance that owns the session |
+/// | `codex` / `codex-cli` | the terminal tab running it — Terminal.app matched by tty, Ghostty by working directory when the title is unavailable |
 /// | `vscode` (and unknown hosts) | the VS Code window that has the workspace open (AX raise, then the `code` CLI for the cross-Space case) |
 /// | `cursor` | Cursor's window for the workspace, then Cursor itself |
 /// | `claude-desktop` | Claude Desktop (it exposes no per-conversation scripting) |
@@ -45,7 +46,7 @@ enum SessionFocusService {
 
     private static func route(ide: String, cwd: String, pid: Int, sessionID: String, siblings: [String]) {
         switch ide {
-        case "cli":
+        case "cli", "codex", "codex-cli":
             focusCLISession(pid: pid, sessionID: sessionID, cwd: cwd, siblings: siblings)
         case "claude-desktop":
             // Claude Desktop scripts no conversation selection, so this is

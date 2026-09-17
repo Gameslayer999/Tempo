@@ -99,6 +99,7 @@ final class SessionStatsService: ObservableObject {
     /// — the projects directory is scanned once for a directory holding a file
     /// with this session's id, rather than guessing again.
     private func transcript(for session: AgentSession) -> URL? {
+        guard !session.ide.hasPrefix("codex") else { return nil }
         if let cached = transcripts[session.id] { return cached }
 
         let root = FileManager.default.homeDirectoryForCurrentUser

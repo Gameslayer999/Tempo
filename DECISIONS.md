@@ -17,7 +17,7 @@
 | 004 | 2026-08-19 | Visualizer v1: playback-synced animated bars (no system-audio capture) | Superseded by 016 (kept as fallback) |
 | 005 | 2026-08-19 | AgentStatus integration: read-only consumer of AgentStatus's existing status files; Tempo installs no hooks | Accepted |
 | 006 | 2026-08-19 | Window: non-activating borderless NSPanel hugging the physical notch; click toggles collapsed/expanded | Amended by 013 |
-| 007 | 2026-08-19 | Repository: private GitHub repo `Gameslayer999/Tempo`; v1 scope is Spotify-only | Accepted |
+| 007 | 2026-08-19 | Repository: private GitHub repo `Gameslayer999/Tempo`; v1 scope is Spotify-only | Privacy reversed by 102; Spotify-only reversed by 049 |
 | 008 | 2026-08-19 | Panel sizing: one static NSPanel at expanded size; SwiftUI animates content; custom `hitTest` passthrough outside the drawn shape | Amended by 012 |
 | 009 | 2026-08-19 | Hover-grow: strip expands ~10×4pt on hover (boringNotch-style spring); passthrough rect is always the hover-grown size so flicker is structurally impossible | Revised by 011 |
 | 010 | 2026-08-19 | Liquid Glass: expanded panel uses macOS 26 `glassEffect` (`.ultraThinMaterial` fallback) with a black-to-glass top gradient; collapsed strip stays pure black | Accepted |
@@ -107,6 +107,12 @@
 | 094 | 2026-09-04 | Every Settings slider's value is now a text field you can type into — units optional, `Never` and `2.5M` understood, clamped to the range but never snapped to the step, since typing exists to reach what lies between steps. Edge hold's ceiling cut from 1500ms to 150ms: nothing past it is a hold anyone would choose | Accepted |
 | 095 | 2026-09-04 | The undrawn strip's target grows from decision 090's 3pt edge band to the menu bar's own row (measured at 30pt, not the 22pt `NSStatusBar` reports): 3pt was too tight to hold, so relaxing the pointer after the bar dropped cancelled the dwell or collapsed the panel a frame after it opened. Safe because the menu-bar gate, not the height, is what keeps it from firing | Accepted |
 | 096 | 2026-09-07 | The topmost row of the display was outside every pointer-tested region: they are top-anchored rects whose `maxY` is `screen.maxY`, and `NSRect.contains` excludes `maxY` — the exact coordinate a pointer shoved into the edge reports. All three now go through `topAnchoredRegion`, one point taller, overshooting above the screen | Accepted |
+| 097 | 2026-09-16 | Add-to-playlist moves from the retired `POST /playlists/{id}/tracks` to `POST /playlists/{id}/items`: Spotify's Feb/Mar 2026 Web API migration retired the `/tracks` path, which now answers a bare 403 `Forbidden` for every caller, including the user's own playlists. Separately, a 403 detail that only restates the status is no longer echoed to the user — it was rendering as the single word "Forbidden" | Accepted |
+| 098 | 2026-09-16 | `swift build` is routed through `scripts/select-sdk.sh`, which probes each installed SDK with a five-line `@State` file and builds against the newest one that actually compiles — the macOS 27 SDK's `@State` is a macro needing a `SwiftUIMacros` plugin that ships only inside Xcode, so the Command Line Tools 27.0 update broke the build outright. The chosen SDK is also copied once to `~/Library/Developer/Tempo/SDKs`, out of the installer's reach | Accepted |
+| 099 | 2026-09-16 | Pausing one player out of several: the audible set comes from the Core Audio HAL's process list, and a pause is routed per app — AppleScript by name for music apps, MediaRemote for whoever holds now-playing. The panel lists them whenever two are playing; an opt-in switch pauses the previous player automatically when a new one takes over | Accepted |
+| 100 | 2026-09-16 | A session finishing a turn raises the same card a track change does — folder, task line and a white check, five seconds, under the collapsed notch. The event is published from the one place the running -> idle *transition* exists (`markFinished`), not derived from the `justFinished` flag that follows it, which is a 20-second state and would re-announce on every poll. The two peeks share one slot, because two cards drawn in the same place would overlap. Toggle in Settings ▸ Agents, on by default | Accepted |
+| 101 | 2026-09-16 | The agent list no longer scrolls inside three rows: it grows a row per session and the panel grows with it. The window height ceiling (`NotchGeometry.panelHeight`) stops being the constant 680 of decision 063 and becomes the target screen's height less a 24pt margin, so the growth has somewhere to go; the list keeps a cap derived from that ceiling purely so rows can never be laid out below the window, where they would not be drawn at all | Accepted |
+| 102 | 2026-09-16 | Tempo goes public at **v0.4**, source-only, on a new tag — `v0.1`/`v0.2`/`v0.3` already existed as pushed milestone tags and `gh release list` was empty, so the missing thing was the Release, not the tag; moving `v0.1` would rewrite published history. No binary is attached because `make-app.sh` signs ad-hoc or Apple-Development and **never notarizes**, so a downloaded zip would be Gatekeeper-refused. Reverses the privacy half of 007 | Accepted |
 
 ---
 
@@ -6162,3 +6168,516 @@ the same top-row exclusion, left alone here: over a hardware notch that row is
 unlit hardware, and with the strip drawn on an external display hover comes
 from a tracking area rather than from that rect. Worth revisiting only if a
 click on the pill's topmost row is ever reported as missing.
+
+---
+
+## 097 — Add-to-playlist uses `/playlists/{id}/items`; a content-free 403 is not echoed
+
+**Date:** 2026-09-16 · **Status:** Accepted
+
+### Context
+
+The add-to-playlist button failed on every attempt, showing the single word
+`Forbidden` — the whole of Spotify's own error message, surfaced verbatim by
+`addFailureMessage`'s 403 branch (decision 003's error reporting prefers
+Spotify's `error.message` over Tempo's own sentence when one is present).
+
+Verified live against this machine's account and the app's stored token
+(Agent Guideline #4), current track `spotify:track:1MottqWa40K0rVmWZRge39`:
+
+```
+POST /v1/playlists/{owned}/tracks          -> 403 {"error":{"status":403,"message":"Forbidden"}}
+POST /v1/playlists/{not owned}/tracks      -> 403 (same bare body)
+DELETE /v1/playlists/{owned}/tracks        -> 403 (same)
+POST /v1/users/{me}/playlists              -> 403 (same)
+PUT  /v1/playlists/{owned}          (name) -> 200, name observed changed and restored
+PUT  /v1/playlists/{owned}/followers       -> 200
+GET  /v1/me, /v1/me/playlists              -> 200
+POST /v1/playlists/{owned}/items           -> 201 {"snapshot_id":...}
+DELETE /v1/playlists/{owned}/items         -> 200 with body {"items":[{"uri":...}]}
+```
+
+Two facts fall out of that. The grant is intact — `playlist-modify-public`
+writes succeed through `PUT`, so this was never a missing scope or an expired
+session, and never the "playlist isn't yours" case decision 049's owner filter
+already removed. And the failure is the path: Spotify's February/March 2026
+Web API migration retired `/playlists/{id}/tracks` in favour of
+`/playlists/{id}/items`, and the retired path now answers 403 `Forbidden`
+rather than 404 or 410 — the one status whose Tempo message blamed ownership.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Point `add()` at `/items` (chosen) | One-word path change; verified 201 on this account; the endpoint Spotify documents today | Drops support for any Spotify deployment still serving only `/tracks` — none observed |
+| Try `/items`, fall back to `/tracks` on 404 | Survives either server | Two round-trips on the failure path, and `/tracks` does not 404 — it 403s, so the fallback could never be reached by its own trigger |
+| Leave the path, improve only the message | Smallest diff | The button still never works — a correctly-worded failure is still a failure |
+
+### Decision
+
+`add()` POSTs to `\(apiBase)/playlists/\(playlistID)/items`. The 403 branch of
+`addFailureMessage` now discards a `detail` that is only the word "Forbidden"
+and falls through to Tempo's own sentence, so a future content-free 403 reads
+as something the user can act on instead of as Spotify's status restated.
+
+### Consequences
+
+Add-to-playlist works again. The ownership sentence is now reachable only for
+a 403 that really is an ownership refusal, which the owner filter in
+`loadPlaylists` already makes rare. Nothing else in `SpotifyWebAPI` touched a
+migrated path: `GET /me` and `GET /me/playlists` are unchanged by the
+migration and were observed returning 200 in the same session.
+
+Not fixed here, and unrelated to this change: `swift build` fails on this
+machine for every SwiftUI file — `error: external macro implementation type
+'SwiftUIMacros.StateMacro' could not be found; plugin for module
+'SwiftUIMacros' not found`. The active toolchain is Command Line Tools only
+(`xcode-select -p` → `/Library/Developer/CommandLineTools`, Swift 6.4, macOS
+27.0 SDK), whose `usr/lib/swift/host/plugins` ships `libObservationMacros` and
+`libSwiftMacros` but no `libSwiftUIMacros`; no Xcode is installed. The edited
+file typechecks standalone (`swiftc -typecheck` on `SpotifyWebAPI.swift`, no
+SwiftUI import), but the app cannot be rebuilt until a toolchain with the
+SwiftUI macro plugin is present.
+---
+
+## 098 — The build picks its SDK by probe, and keeps a copy of the one that works
+
+**Date:** 2026-09-16 · **Status:** Accepted
+
+### Context
+
+`swift build` stopped building this project entirely. Every SwiftUI file failed
+with:
+
+```
+VisualizerView.swift:67:24: error: external macro implementation type
+'SwiftUIMacros.StateMacro' could not be found for macro 'State()';
+plugin for module 'SwiftUIMacros' not found
+```
+
+Measured on this machine rather than inferred. In the macOS 27.0 SDK,
+`SwiftUICore.swiftinterface:20038` declares
+
+```swift
+@attached(accessor, ...) @attached(peer, ...) public macro State() = #externalMacro(
+    module: "SwiftUIMacros", type: "StateMacro")
+```
+
+— `@State` is a macro now. The macOS 26.5 SDK's interface has no such
+declaration; there it is still a property wrapper. The macro needs a compiler
+plugin, and `/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins`
+holds only `libObservationMacros` and `libSwiftMacros`: `libSwiftUIMacros`
+exists nowhere on this machine, because it ships inside Xcode, which is not
+installed. `xcode-select -p` is the Command Line Tools.
+
+The trigger was an update, not a change to Tempo: CLT 27.0.0 installed
+2026-09-10 (`pkgutil --pkg-info`), three days after `dist/Tempo.app` was last
+built on 09-07, and it made `MacOSX.sdk` point at `MacOSX27.0.sdk`.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Install Xcode | Supplies the plugin; the newest SDK builds; macOS 27 APIs become available | ~20GB, manual download, and Xcode's own updates are more of exactly the version churn that caused this |
+| Hardcode `SDKROOT=…/MacOSX26.5.sdk` in the build scripts | One line | A pinned version number is a second thing to remember to change, and it goes stale silently — the build would stay on 26.5 forever, including after a toolchain that can do better arrives |
+| Probe each installed SDK and use the newest that compiles (chosen) | No version number anywhere; self-correcting in both directions — the day a toolchain ships the plugin, the newest SDK starts passing and is picked with no edit | A few seconds on a cold run, so it needs a cache |
+| Probe, plus keep a copy of the working SDK outside the installer's reach (chosen) | Survives a Command Line Tools reinstall that ships only the newest SDK — the last failure mode the probe alone cannot cover | ~303MB of disk |
+
+### Decision
+
+The last two, as `scripts/select-sdk.sh`: it collects every macOS SDK under
+Command Line Tools, Xcode (if present) and its own copy directory, sorts them
+newest-first, and typechecks a five-line SwiftUI view with a `@State` in it
+against each until one compiles. That path is printed for `SDKROOT`;
+`scripts/build.sh` and `scripts/make-app.sh` both build through it. The result
+is cached in `~/Library/Developer/Tempo/sdk-pin`, keyed on the compiler version
+plus the full candidate list, so adding or removing an SDK — or updating the
+toolchain — re-probes by itself. The chosen SDK is copied once to
+`~/Library/Developer/Tempo/SDKs`; the copy is a candidate like any other, so
+there is no separate fallback path to rot.
+
+No version number appears anywhere in the script.
+
+### Consequences
+
+Verified end to end on this machine:
+
+- Cold run: `SDK 27.0: cannot build SwiftUI here … skipping`, then
+  `SDK 26.5: builds SwiftUI`, then the copy — 54s including the copy.
+- Cached run: 0.16s, silent.
+- `swift build` and `swift build -c release` both complete against the chosen
+  SDK (34.6s and 40.3s).
+- Simulating a Command Line Tools with its SDKs gone (the roots list pointed at
+  a nonexistent directory) selects `~/Library/Developer/Tempo/SDKs/
+  MacOSX26.5.sdk`, and a **release build against that copy completes** — so the
+  copy is a real fallback, not a reassuring gesture.
+
+The copy is verified by the same probe before it is given its final name; a
+half-finished copy would otherwise sit there looking like a candidate for the
+day it is actually needed. It is written to `<name>.partial` first, which is
+outside the `MacOSX*.sdk` glob, and retried once — the first attempt against
+that directory failed and an identical retry succeeded, cause unidentified.
+
+The cost of this choice: while pinned to the 26.5 SDK, Tempo cannot adopt
+macOS 27-only APIs. Nothing in the app needs one — it targets macOS 14 and its
+newest dependency is Liquid Glass from 26 — and the probe lifts the limit on
+its own if Xcode ever appears.
+
+Nothing here writes inside `/Library/Developer`: the script only reads SDKs,
+and writes to its own directory under `~/Library/Developer/Tempo`.
+
+---
+
+## 099 — Pausing one player out of several: the HAL says who is audible, the route says who can be stopped
+
+**Date:** 2026-09-16 · **Status:** Accepted
+
+### Context
+
+Asked for directly: *"i want tempo to have the ability to pause a specific
+track when multiple thigns are playing: like when spotify is playing but i am
+starting a youtube video."*
+
+macOS lets every app hold the output device at once, so Spotify and a YouTube
+tab simply play over each other, and Tempo's existing transport row is no help
+— every control in it goes through `MediaRemoteService`, which models the
+machine as having exactly **one** now-playing client. That is not a limitation
+of the adapter's CLI but of the framework underneath it: `MRMediaRemoteSendCommand`
+takes a command and a `userInfo` dictionary and nothing else (read off the
+vendored `src/adapter/send.m` and `src/private/MediaRemote.h`), so `pause`
+always lands on whichever app took over last. In the reported scenario that is
+Chrome — precisely the app the user does *not* want paused.
+
+Two things therefore had to be established before any code (Agent Guideline #4),
+both measured live on this machine, macOS 26.6, 2026-09-16:
+
+**Who is actually making sound.** The Core Audio HAL knows. Enumerating
+`kAudioHardwarePropertyProcessObjectList` and reading
+`kAudioProcessPropertyIsRunningOutput` on each object reported Spotify at `1`
+and Chrome at `0` while Spotify played alone, with `kAudioProcessPropertyPID`
+and `kAudioProcessPropertyBundleID` answering on every object. `AudioTapService`
+has used these same selectors since decision 059, but only folded to a single
+"is anything playing" bool.
+
+**Which process to blame for the sound.** Browsers and Electron apps render
+audio in helper processes. Measured mapping for the helpers present: Chrome's
+5648 and 5649 → 1294, Spotify's 22399 → 1383, Discord's 1519 and 1532 → 1299.
+Both `responsibility_get_pid_responsible_for_pid` and a plain `ppid` walk
+produced that identical set, so the public one is enough.
+
+The obvious walk — take the first ancestor that has an `NSRunningApplication` —
+is wrong, and measuring caught it before it ever ran. A helper *does* resolve:
+Chrome's helper pid answers with a live object whose bundle id is
+`com.google.Chrome.helper` and whose activation policy is `.accessory`, so that
+walk stops one process short and yields a bundle id that matches nothing and
+can be paused by nothing. The test is the policy: `com.google.Chrome.helper`
+and `com.hnc.Discord.helper[.Renderer]` are `.accessory`, Chrome, Discord and
+Spotify are `.regular`. Safari is worse still — its audio comes from
+`com.apple.WebKit.GPU`, whose parent resolves to nothing at all.
+
+One thing is **not** yet verified and is recorded as such: no YouTube video was
+playing during the measurement window, so Chrome's audio has been attributed
+through its process tree but never observed with `isRunningOutput` actually set.
+
+### Options
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| A list of what is playing, each row with its own pause (chosen, both halves) | Direct — the user picks the one to silence; never acts on its own | Needs the panel open |
+| Auto-pause the previous player when a new one starts (chosen, opt-in, default off) | Zero interaction, which is the actual complaint | Acts on another app unprompted; only reaches AppleScript-controllable apps |
+| Mute the other app instead of pausing it | Reaches any app, including a background browser tab | The HAL exposes no per-process volume; a YouTube video muted rather than paused keeps running, which is not what "pause" means |
+| Inject JavaScript into the browser tab over Apple Events | Would reach a background tab | Requires the user to enable "Allow JavaScript from Apple Events" by hand — a manual step Guideline #8 forbids — and full Automation control of the browser for one button |
+
+### Decision
+
+`AudioSourcesService` publishes the apps that are audible **and** pausable,
+from two sources, because neither is sufficient alone. The **now-playing client
+comes from MediaRemote**, which already names the app properly and already
+knows whether it is playing — that is what makes a browser row correct despite
+the helper problem above. **Everything else comes from the HAL**, filtered to
+the AppleScript set, which is exactly the set of apps that go on playing
+underneath a new now-playing client, and which produce audio from their own
+`.regular` process under their own bundle id (measured: Spotify's audio object
+is pid 1383 `com.spotify.client` itself, Music's is pid 1306 `com.apple.Music`).
+
+The pause route is part of each row's identity rather than something worked out
+at click time:
+
+- `.appleScript(application:)` — Spotify, Music, TV, Podcasts, VLC, IINA,
+  QuickTime Player. Names the app, so it works no matter who holds now-playing.
+  This is the route that reaches the *older* player.
+- `.mediaRemote` — whoever currently holds now-playing, via
+  `MediaRemoteService.pauseNowPlaying()`. The only route that reaches a browser
+  tab, and it reaches it precisely because the tab is what started last.
+
+An app that is neither — a background browser tab that has lost now-playing —
+**is not listed at all**. There is no third route to it, and a row whose pause
+button did nothing would be a lying control (UI Principle #4).
+
+The panel draws the rows only when two or more apps are playing: one player is
+what the transport row above already controls, and repeating it would be a
+second control for the same thing. The scan is a 1s poll that runs only while
+the panel is open.
+
+The automatic rule is `Settings ▸ Music ▸ "Pause the previous player when a new
+one starts"`, **off by default** — the only switch in `Preferences` that
+defaults to off against the house rule at the top of that file, and
+deliberately: every other one decides whether Tempo draws something, this one
+decides whether Tempo reaches into another app and stops it unasked. When a
+different app takes over now-playing *and* is playing, the app that lost it is
+paused — but only after re-reading the HAL to confirm it is still making sound
+(so pausing Spotify yourself first means nothing is sent), only if it can be
+named over AppleScript, and only if the handover still stands 0.4s later. The
+comparison is against the last app seen **playing**, not the last app seen:
+players emit empty frames between handovers, and comparing against one of those
+would blank out the previous player exactly when the rule needs it.
+
+`pause` is sent rather than `playpause` everywhere, including the row buttons:
+this feature only ever silences something, and a toggle sent to an app that
+stopped on its own between the scan and the click would start it playing.
+
+### Consequences
+
+Spotify-under-YouTube is covered from both ends: Chrome is pausable because it
+holds now-playing, Spotify because it answers to its name. The reverse case —
+a background browser tab that is not now-playing — is not covered by anything
+here and is documented as such in the README rather than papered over.
+
+First use of a row's pause will raise the system's Automation prompt for that
+app, once, the same grant `MusicService` already asks for.
+
+Also fixed here, because it made the change untestable: `scripts/make-app.sh`
+ran `swift build -c release` directly and so could not build on this machine at
+all, failing with the `SwiftUIMacros` plugin error that `scripts/select-sdk.sh`
+exists to route around. `scripts/build.sh` had the fix; `make-app.sh` never got
+it. It now exports the same selected `SDKROOT`.
+
+Written concurrently with decisions 098, 100 and 101 by another session on the
+same day; the SDK workaround this entry leans on is that 098.
+
+---
+
+## 100 — A finished session raises the same card a track change does
+
+**Date:** 2026-09-16 · **Status:** Accepted · **Extends 072**
+
+*Numbered 100, not 098 or 099: a second Claude Code session was editing this
+repo while this was written and has already claimed both — 097 and (in its
+`AgentLightsView` row-count comment) 098 in one, 099 in its `audioSources`
+work in `ContentView`. Those two entries are theirs to write; the gap is
+deliberate, not a lost decision.*
+
+### Context
+
+Decision 072 built the sneak peek for the one moment the panel's answer is
+wanted without being asked for — a track change. The agent lights have exactly
+the same moment and nothing built for it: a turn ending is *the* thing the user
+is waiting on, and until now finding out meant either catching the pill's white
+dot out of the corner of an eye or hovering the notch to read the row. The user
+asked for the finish to raise the same card the next track does.
+
+The transition itself was already being computed. `AgentStatusService`'s
+`markFinished` has detected running -> idle since decision 042, with decision
+043's interrupted-turn exclusion and decision 045's acknowledgement check
+already applied to it — so this is a display for a signal that exists, not a
+new read of anything. Tempo still writes nothing under `~/.claude/**`
+(Agent Guideline #3).
+
+### Options
+
+| | Option | Against |
+|---|---|---|
+| A | A **second** overlay beside the track peek | Both draw in the same place under the notch. A track change and a finish land together often enough — you start a turn and change the music — and two cards at that point overlap into unreadable mush |
+| B | Derive the card from the `justFinished` flag in the view | The flag is a 20-second *state*, not a moment. The view would have to remember which ids it had already shown a card for, which is the transition memory `markFinished` already keeps, kept twice |
+| C | A macOS notification through `UNUserNotificationCenter` | Wrong surface, and this app is about not having to look away from the notch. It also lands in a queue the user has to dismiss, where the point of the peek is that it goes away by itself |
+| **D** | **One peek slot, raised from an event the poller publishes** | Chosen |
+
+### Decision
+
+`AppState.lastAgentFinish` is an `AgentFinish` event — session id, label, task
+excerpt, and the instant it was observed — published by `markFinished` at the
+moment it records the transition, before the flag that follows it. The
+timestamp is what makes two consecutive turns of one session two events rather
+than one. Two sessions finishing inside a single 2s poll raise the first: there
+is a single card, so the second would only replace it in the same frame.
+
+`ContentView` now holds **one** peek slot (`NotchPeek`) instead of a track:
+title, optional subtitle, optional glyph and tint, spoken label, and its own
+duration. A track change and a finish both go through `raisePeek`, so they
+cannot drift apart on placement, material, transition, hit-testing or the
+suppression while the panel is open — and a card arriving while another is up
+replaces it, which is the right answer for a transient HUD.
+
+The finish card reads *"<folder> finished"* over the session's task line, with
+a white `checkmark.circle.fill` and the halo `AgentAppearance(.finished)`
+already gives that state in the panel, so the notch says "finished" in the same
+colour and shape everywhere. It stays up for a fixed **5 seconds** —
+deliberately not a second slider: the two cards are read at different moments
+(a track change while you are already looking at the screen, a finish after
+something moves in the corner of your eye), so the finish simply wants the
+longer of the two.
+
+`Preferences.agentFinishPeek` (Settings ▸ Agents ▸ Finish peek, **on**) gates
+it, and is independent of `showAgentLights` — the same relationship
+`collapsedAgentLight` has: switching the expanded panel's list off is a
+statement about the panel, not a request to stop being told a turn ended.
+
+The task excerpt is rendered in the card and nowhere else — not logged, not
+written, not copied (Agent Guideline #5) — the same terms the panel row already
+displays it under.
+
+### Consequences
+
+The track peek's observable behaviour is unchanged (Agent Guideline #7): same
+material, same position, same 3s default, same suppression rules, same
+retraction on a stop or a nameless track. Only the state it lives in was
+renamed and generalised.
+
+**Not yet seen on screen, and not built.** `swift build` still fails on this
+machine for every SwiftUI file — `SwiftUIMacros.StateMacro` is missing from the
+Command Line Tools toolchain and no Xcode is installed (see decision 097's
+closing note and NEXT_STEPS ▸ Now). All five edited files parse clean
+(`swiftc -parse`), which is as far as verification can go here: type checking
+`ContentView` requires the same macro plugin the build needs. The card's
+appearance, the 5s duration and the collision behaviour between a track change
+and a finish all need a real look once the toolchain is resolved.
+
+---
+
+## 101 — The agent list grows the panel instead of scrolling
+
+**Date:** 2026-09-16 · **Status:** Accepted
+
+**Context.** `AgentLightsView` showed three rows and scrolled the rest
+(`visibleRows = 3`). With four or more live sessions — routine on this machine,
+which had five during this work — the panel showed three and hid the others
+behind a scroll gesture nobody thinks to make on a notch panel. That is exactly
+the stale/partial signal UI Principle #4 rules out: the light that wants you may
+be the one below the fold, and the attention-first ordering of decision 047 only
+mitigates it.
+
+The cap existed for a real reason. The window is never resized while the panel
+animates — the window is sized once to the maximum and only the SwiftUI content
+moves — so anything the content lays out past `NotchGeometry.panelHeight` is
+outside the window and simply never drawn. Decision 063 raised that ceiling to
+a constant 680pt, computed from the fullest content mix *including* a
+three-row agent list. Growing the list without raising the ceiling would have
+traded a scroll for a silent clip, which is worse.
+
+**Options.**
+
+| | Approach | Pros | Cons |
+|---|---|---|---|
+| A | Raise the 680 constant to a bigger constant | One-line change | Same failure mode one session later; the right number depends on the display |
+| B | Resize the `NSPanel` as the content grows | Window is never bigger than it needs | Breaks the invariant the whole hit-testing design rests on: `NotchHitRegion` and `NotchHostingView.hitTest` read live geometry against a fixed window rect, and a window frame animating alongside the SwiftUI spring is a second animation to keep in sync |
+| C | Ceiling = target screen height − margin; list grows to fit it | Keeps the fixed-window invariant exactly; the bound becomes the physical limit rather than a guess at content | The window is mostly empty most of the time |
+
+**Decision: C.** `panelHeight` is now
+`max(screenFrame.height - 24, 320)`, re-read on every display change through
+the existing `refresh()` / `applyGeometry()` path like every other figure in
+`NotchGeometry`. The empty window costs nothing: it is transparent outside the
+drawn shape and `NotchHostingView.hitTest` already hands every point outside the
+live silhouette to the app behind (Agent Guideline #3), and the drawn panel
+still sizes itself to its content in `ContentView.currentHeight`.
+
+`AgentLightsView` keeps a row cap, but it is now derived rather than fixed:
+`(panelHeight - 520) / 30`, floored at three. The 520 is the fullest non-agent
+panel content (decision 063's ~556pt figure less the three agent rows it
+included), rounded up. The cap is not a display choice any more — it is the
+line past which a row would be laid out below the window and not drawn — so it
+only bites on a machine with more live sessions than the screen can show, and
+the scroll survives underneath for exactly that case.
+
+**Verified on screen.** Five live sessions, 3440x1440 display: ceiling 1416pt,
+panel content measured 542pt + 32pt strip = 574pt, all five rows drawn with the
+panel's rounded bottom below them (`TEMPO_DEBUG_VIZ=1`, pointer driven into the
+notch the way `scripts/capture-panel-animation.sh` does it, screenshot read
+back). Before this change the same five sessions drew three rows and scrolled.
+
+### Consequences
+
+The panel is now as tall as its content demands, so a busy machine gets a tall
+panel — that is the intent, and the ceiling is what keeps it on the display.
+Nothing else in the panel changed: every other section is bounded as it was
+(the shelf and output rows still scroll horizontally), and the debug line that
+reports a clipped panel is unchanged and still the way an overflow shows up.
+
+---
+
+## 102 — Tempo goes public at v0.4, source-only, on a new tag
+
+**Date:** 2026-09-16
+**Status:** Accepted
+**Reverses:** the privacy half of decision 007
+
+### Context
+
+The ask was "release v0.1 of Tempo on GitHub". Three facts made that literal
+reading impossible, and all three were checked before anything was published:
+
+- **`v0.1`, `v0.2` and `v0.3` already exist as tags, and are already pushed**
+  (`v0.1` = `dea8c33`, 2026-08-22). They are internal build milestones, not
+  releases — `gh release list` was empty, so what had never existed was the
+  GitHub *Release*, not the tag.
+- **The repository was private** (decision 007), so a Release on it would have
+  been visible to nobody.
+- The working tree carried ~1,000 uncommitted lines across 17 tracked files and
+  four new sources, so no existing commit contained the current work.
+
+### Options considered
+
+| Option | Verdict |
+|---|---|
+| Release the existing `v0.1` tag | Rejected — `dea8c33` is five weeks and three milestones behind; publishing it as the current app would be a lying signal |
+| Force-move `v0.1` to the current commit | Rejected — rewrites already-pushed history for a cosmetic version number |
+| New three-part tag `v0.1.0` | Viable: does not collide with the two-part `v0.1`, and starts the public series at "v0.1" as asked |
+| **New tag `v0.4`** | **Chosen** — continues the existing `v0.1`/`v0.2`/`v0.3` series honestly rather than restarting the numbering beside it |
+
+### Decision
+
+Tag the current work **`v0.4`** on `main`, flip `Gameslayer999/Tempo` to
+public, and publish a **source-only** Release — no binary attached.
+
+Source-only is the deliberate half. `scripts/make-app.sh` signs the bundle with
+an Apple Development identity when one is in the keychain and ad-hoc otherwise;
+**neither is notarized**, so a `.zip` downloaded from GitHub would arrive
+quarantined and be refused by Gatekeeper on every machine but this one. Shipping
+a download that cannot be opened is worse than shipping none, and the honest
+alternative — telling every user to `xattr -d com.apple.quarantine` a binary
+from a stranger — is advice this project should not give. The existing
+`dist/Tempo-v0.2.zip` was also assembled by hand, which Agent Guideline #8
+forbids; a zip asset would need packaging scripted first.
+
+### What was checked before flipping visibility
+
+Going public is effectively irreversible (forks, caches, indexing), so the
+whole history was audited, not just the working tree:
+
+- **Credentials: none, ever.** All 18 commits scanned for token, key and
+  private-key shapes — zero hits. `config.json`, `tokens.json` and `*.log` were
+  never committed; `.gitignore` has covered them since the first commit.
+- **Personal paths: eight, all in the uncommitted README**, in the
+  `~/.codex/hooks.json` example, which hardcoded
+  `/Users/<user>/Documents/code/Tempo/...` eight times. Replaced with
+  `/absolute/path/to/Tempo/...` plus a note that Codex expands neither `~` nor
+  relative paths in a hook command. Committed history had none.
+- **`scripts/__pycache__/` was untracked *and* ungitignored** — a `.pyc` was
+  one `git add -A` from being published. `__pycache__/` and `*.pyc` added to
+  `.gitignore` and the directory removed.
+- **Licensing is clean for redistribution.** Tempo is MIT; the vendored
+  `mediaremote-adapter` is BSD-3 with its LICENSE, upstream URL, pinned commit
+  and local modifications all recorded in `Vendor/mediaremote-adapter/`.
+
+### Consequences
+
+The README's status banner no longer describes the 2026-08-20 rework as the
+newest thing in the app. It now states the version, that the app has only ever
+run on one Mac, that there are no tests, and it **names the seven features that
+compile but have never been watched on screen** (two-player pause rows, finish
+peek, lock-screen cards, album-glow curve, full-screen hiding, pinned-display
+picker, capture exclusion) rather than leaving a visitor to infer that
+everything listed is proven. A public pre-alpha that overstates itself is the
+one failure mode worth more than the download convenience given up above.
+
+`CLAUDE.md` also claimed Tempo "builds with `swift build`", which decision 098
+had already made false; it now says `scripts/build.sh`.
