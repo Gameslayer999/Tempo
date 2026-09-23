@@ -54,6 +54,18 @@ final class MenuBarSensor {
     /// True only when the bar is *fully* down. The slide's intermediate frames
     /// hang off the top of the screen and read false, so the gate opens when
     /// the bar has arrived rather than while it is still on its way.
+    ///
+    /// Anchored to the menu bar's *row* rather than to the screen's top edge
+    /// (decision 103). The row is what the sensor window comes to rest on, and
+    /// it is the one part of this geometry that holds across displays; how tall
+    /// the window is, and how it sits within the row, does not. Measured on the
+    /// external LG ULTRAWIDE the window is 34pt and centred on the 30pt row, so
+    /// it rests 2pt *proud* of `screen.frame.maxY` — which the previous
+    /// `maxY <= screen.frame.maxY + 0.5` read as "not down", permanently, and
+    /// with it went the only way to open the undrawn notch. Comparing the
+    /// window's bottom edge against the row's top, with slack for that
+    /// centring, reads every state on record correctly: LG at rest 1408, and on
+    /// the built-in panel fully down 1410, sliding 1416…1434, hidden 1440.
     var isMenuBarDown: Bool {
         guard let window = item?.button?.window else { return false }
         let frame = window.frame
@@ -62,6 +74,16 @@ final class MenuBarSensor {
         guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) else {
             return false
         }
-        return frame.maxY <= screen.frame.maxY + 0.5
+        // `visibleFrame`'s top inset is the bar's row. It is reserved whether
+        // the bar is shown or hidden (decision 091 measured that), which is
+        // exactly what makes it a stable reference rather than a second signal.
+        let barRow = screen.frame.maxY - screen.visibleFrame.maxY
+        return frame.minY <= screen.frame.maxY - barRow + Self.rowSlack
     }
+
+    /// How far above the row's top the sensor window may rest and still count
+    /// as arrived. Covers the window being taller than the row and centred on
+    /// it (2pt on the LG); stays well below the 6pt gap to the nearest sliding
+    /// frame on record, so "fully down only" survives.
+    private static let rowSlack: CGFloat = 4
 }

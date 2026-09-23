@@ -9,10 +9,12 @@ session status**.
 > macOS 26). It has only ever run on one Mac, and there are no tests: treat it as
 > something to read and build, not something to depend on. Several features are
 > written and compiling but **have not yet been watched on screen** — the
-> two-player pause rows, the session-finish peek, the lock-screen cards, the
-> album-glow strength curve, full-screen hiding, the pinned-display picker, and
-> capture exclusion. `NEXT_STEPS.md` names exactly what is unverified and how to
-> check it; `DECISIONS.md` records why every choice was made.
+> two-player play/pause rows, the session-finish peek, the lock-screen cards, the
+> album-glow strength curve, the pinned-display picker, and capture exclusion.
+> **Full-screen hiding now works on an external display** (decision 106) but has
+> never been exercised — it is off by default.
+> `NEXT_STEPS.md` names exactly what is unverified and how to check it;
+> `DECISIONS.md` records why every choice was made.
 >
 > Distribution is source-only. There is no signed or notarized download, so
 > build it yourself — see **Building**.
@@ -98,16 +100,19 @@ column:
   a second, because macOS pushes the new position to Tempo as it happens.
 - **what else is playing** — start a YouTube video while Spotify is going and
   both play at once; macOS lets every app hold the audio device. When two apps
-  are playing, Tempo lists them under the controls with a pause button each, so
-  you can silence the one you didn't mean to leave running. Turn on
+  have made sound, Tempo lists them under the controls with a play/pause button
+  each, so you can silence the one you didn't mean to leave running — and start
+  it again afterwards. **A row stays on the list until its app quits**, playing
+  or not, so pausing one doesn't make the list disappear; the name and icon dim
+  and the button turns into a play button. Turn on
   Settings ▸ Music ▸ **Pause the previous player when a new one starts** and it
   happens by itself — the app that was already playing stops as soon as another
   takes over. It's off by default because it reaches into another app unasked.
-  Tempo can pause any app that answers AppleScript (Spotify, Music, TV,
-  Podcasts, VLC, IINA, QuickTime Player) plus whichever app most recently took
-  over playback — which is how a YouTube tab gets paused. A browser tab that is
-  already playing in the *background* can't be reached by either route, so
-  Tempo leaves it out of the list rather than offering a button that does
+  Tempo can play and pause any app that answers AppleScript (Spotify, Music,
+  TV, Podcasts, VLC, IINA, QuickTime Player) plus whichever app most recently
+  took over playback — which is how a YouTube tab gets paused. A browser tab
+  that is already playing in the *background* can't be reached by either route,
+  so Tempo leaves it out of the list rather than offering a button that does
   nothing. The first pause of a given app asks macOS for permission to control
   it, once.
 - **audio output** — a mute button, a volume slider, and one chip per output
@@ -334,15 +339,25 @@ Agents — so a pane is found by colour before it is read.
   the very top edge of the display, in the middle, the same way you drop a
   hidden menu bar, and the panel opens with the same hover delay and the same
   tick. The target is the middle of the menu bar's own row, and where that bar
-  auto-hides Tempo waits until it is actually down — so reaching for a tab in a
-  full-screen browser, which runs to the same top edge, doesn't open it. In that mode only, Tempo keeps a zero-width item in the menu bar: it
-  draws nothing and exists purely to sense whether the bar is down. **Edge
-  hold** sets how long the pointer must stay at the edge after the menu bar has
-  dropped — 0 opens the moment it lands, up to 150 ms for a deliberate hold. It
-  applies only while the strip is hidden, so it's disabled when the toggle
-  above it is on. While it is closed it is invisible *and*
+  auto-hides Tempo waits until it is actually down. **Where the menu bar is
+  permanently visible that wait cannot apply**, and the panel opens on any push
+  into that row; on at least one external display the sensor never moves at all,
+  so that is the behaviour you get — see decision 103. In that mode only, Tempo
+  keeps a zero-width item in the menu bar: it draws nothing and exists purely to
+  sense whether the bar is down. **Edge hold** sets how long the pointer must
+  stay at the edge — 0 opens the moment it lands, up to 150 ms for a deliberate
+  hold. It applies only while the strip is hidden, so it's disabled when the
+  toggle above it is on. While it is closed it is invisible *and*
   click-through, so the menu bar underneath behaves exactly as if Tempo weren't
   running.
+
+  **While an app is full screen, the panel opens only once the menu bar is
+  actually on screen.** That top row belongs to the app there — a browser puts
+  its tab strip in it — so reaching for a tab does nothing at all. Hold the
+  pointer against the very top edge and macOS slides the menu bar down over the
+  app (about half a second); the panel opens with it, under a bar that has by
+  then pushed the app's own row out of the way. A pointer merely passing
+  through the edge is gone long before that, so it never opens (decision 106).
 
   *Full screen* chooses what happens when an app goes full screen: **Never
   hide** (the default, and how every earlier version behaved), **Hide for the

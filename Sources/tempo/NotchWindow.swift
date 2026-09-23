@@ -343,6 +343,7 @@ final class NotchPanel: NSPanel {
     private var screenObserver: Any?
     private var spaceObservers: [NSObjectProtocol] = []
     private var settleTask: Task<Void, Never>?
+    private var rejoinTask: Task<Void, Never>?
     private let state: AppState
     private let prefs: Preferences
 
@@ -514,7 +515,10 @@ final class NotchPanel: NSPanel {
             spaceObservers.append(workspace.addObserver(
                 forName: name, object: nil, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.applyFullScreenVisibility() }
+                MainActor.assumeIsolated {
+                    self?.applyFullScreenVisibility()
+                    self?.scheduleSpaceRejoin()
+                }
             })
         }
     }
@@ -547,11 +551,14 @@ final class NotchPanel: NSPanel {
 
     /// Hides or restores the panel for the current full-screen state.
     ///
-    /// Detected from the screen's own geometry rather than from any private
-    /// API: a Space showing a full-screen app hides the menu bar, so
-    /// `visibleFrame` reaches `frame`'s top edge; in every ordinary Space the
-    /// menu bar keeps them apart. That check costs nothing and needs no
-    /// Accessibility grant, which a window-list walk would.
+    /// Detected from the window server's own window list — an app's window
+    /// occupying the menu bar's row (`ScreenWindows.isFullScreen`) — and not,
+    /// as before, from `visibleFrame` reaching `frame`'s top edge. That
+    /// geometry test was dead on this monitor: the top inset was measured
+    /// holding at 30pt in every state, full screen included (decisions 103,
+    /// 106), so Settings ▸ *When an app is full screen* did nothing here at
+    /// all. The window list needs no Accessibility or Screen Recording grant
+    /// for the layer, pid and bounds this reads.
     func applyFullScreenVisibility() {
         let behavior = prefs.fullScreenBehavior
         guard behavior != .never else {
@@ -560,11 +567,7 @@ final class NotchPanel: NSPanel {
         }
         guard let screen = NotchGeometry.targetScreen else { return }
 
-        // A Space showing a full-screen app hides the menu bar, so
-        // `visibleFrame` reaches `frame`'s top edge; in every ordinary Space
-        // the menu bar keeps them apart. Needs no private API and no
-        // Accessibility grant, which a window-list walk would.
-        let menuBarHidden = screen.visibleFrame.maxY >= screen.frame.maxY - 1
+        let inFullScreen = ScreenWindows.isFullScreen(on: screen)
 
         // `.mediaApp` hides only for the app that is actually playing. Without
         // this the option would behave identically to `.allApps` — a control
@@ -575,11 +578,11 @@ final class NotchPanel: NSPanel {
         case .never:
             shouldHide = false
         case .allApps:
-            shouldHide = menuBarHidden
+            shouldHide = inFullScreen
         case .mediaApp:
             let playing = state.nowPlaying?.sourceBundleID
             let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-            shouldHide = menuBarHidden && playing != nil && playing == front
+            shouldHide = inFullScreen && playing != nil && playing == front
         }
 
         if shouldHide {
@@ -603,7 +606,42 @@ final class NotchPanel: NSPanel {
             try? await Task.sleep(for: .milliseconds(750))
             guard !Task.isCancelled else { return }
             self?.applyGeometry()
+            self?.scheduleSpaceRejoin()
         }
+    }
+
+    /// Puts the panel back on the active Space when the window server has left
+    /// it out. Observed on the built-in display: over a full-screen Chrome the
+    /// panel was ordered in (`isVisible`) with `.canJoinAllSpaces` and
+    /// `.fullScreenAuxiliary` set, yet `kCGWindowIsOnscreen` read false — while
+    /// a fresh panel with the same flags drew there fine, and so did Tempo's
+    /// own once Chrome re-entered full screen on a new Space. Re-assigning the
+    /// collection behaviour is what re-registers membership; measured with a
+    /// probe panel missing from a full-screen Space, it drew there after the
+    /// reassignment. The check waits out the Space animation: read at the
+    /// notification itself, `kCGWindowIsOnscreen` is false mid-transition even
+    /// for a panel that is about to be drawn.
+    private func scheduleSpaceRejoin() {
+        rejoinTask?.cancel()
+        rejoinTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            self?.rejoinActiveSpaceIfMissing()
+        }
+    }
+
+    private func rejoinActiveSpaceIfMissing() {
+        // Not visible means deliberately ordered out by the full-screen
+        // setting; "hide for all apps" keeps the panel off full-screen Spaces
+        // by design. Neither is a missing panel.
+        guard isVisible, prefs.fullScreenBehavior != .allApps else { return }
+        let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(windowNumber))
+            as? [[String: Any]]
+        guard info?.first?[kCGWindowIsOnscreen as String] as? Bool != true else { return }
+        let behavior = collectionBehavior
+        collectionBehavior = []
+        collectionBehavior = behavior
+        orderFrontRegardless()
     }
 
     /// Moves/resizes the window onto the current notch, and tells the SwiftUI
@@ -624,6 +662,7 @@ final class NotchPanel: NSPanel {
 
     deinit {
         settleTask?.cancel()
+        rejoinTask?.cancel()
         let workspace = NSWorkspace.shared.notificationCenter
         for observer in spaceObservers {
             workspace.removeObserver(observer)

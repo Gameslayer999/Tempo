@@ -2,37 +2,45 @@ import AppKit
 import CoreAudio
 import Foundation
 
-/// One app that is audibly playing right now *and* that Tempo can actually
-/// pause. Both halves matter: a row for an app Tempo cannot silence would be a
-/// control that does nothing (UI Principle #4), so the route is part of the
-/// identity rather than something discovered at click time.
+/// One app that is a live audio source on this machine *and* that Tempo can
+/// actually control. Both halves matter: a row for an app Tempo cannot reach
+/// would be a control that does nothing (UI Principle #4), so the route is
+/// part of the identity rather than something discovered at click time.
+///
+/// A source is listed from the first moment it is heard until its app quits —
+/// pausing it does not take its row away (decision 104). `isPlaying` is what
+/// the row *draws*; it is not what decides the row exists.
 struct AudioSource: Identifiable, Equatable {
-    /// How this particular app gets paused. See `AudioSourcesService` for why
-    /// there are two routes and no third.
-    enum PauseRoute: Equatable {
+    /// How this particular app gets played and paused. See
+    /// `AudioSourcesService` for why there are two routes and no third.
+    enum ControlRoute: Equatable {
         /// The app is the current MediaRemote now-playing client, so the
-        /// framework's `pause` command lands on it. This is the only route
-        /// that reaches a browser tab.
+        /// framework's `play`/`pause` commands land on it. This is the only
+        /// route that reaches a browser tab.
         case mediaRemote
-        /// The app answers an AppleScript `pause`. Works regardless of who
-        /// holds now-playing, which is the whole point: the *older* player is
-        /// never the now-playing client once something else starts.
+        /// The app answers an AppleScript `play`/`pause`. Works regardless of
+        /// who holds now-playing, which is the whole point: the *older* player
+        /// is never the now-playing client once something else starts.
         case appleScript(application: String)
     }
 
     let bundleID: String
     let name: String
-    let route: PauseRoute
+    let route: ControlRoute
     /// Whether this is the app MediaRemote currently considers now-playing —
     /// i.e. the one the existing transport row already controls. Drives the
-    /// row's ordering and its "playing here" emphasis.
+    /// row's ordering.
     let isNowPlaying: Bool
+    /// Whether the app is making sound right now — the HAL's answer for the
+    /// AppleScript apps, MediaRemote's for the now-playing client. Decides
+    /// which glyph the row's button shows and which way a click goes.
+    var isPlaying: Bool
 
     var id: String { bundleID }
 }
 
-/// Which apps are making sound right now, and pausing one of them by name
-/// (decision 099).
+/// Which apps are live audio sources, and playing or pausing one of them by
+/// name (decisions 099 and 104).
 ///
 /// **Why this service exists at all.** MediaRemote — everything
 /// `MediaRemoteService` drives — models the machine as having exactly *one*
@@ -58,6 +66,12 @@ struct AudioSource: Identifiable, Equatable {
 /// client is taken from MediaRemote, which names it correctly to begin with.
 /// See `refresh` and `owningApp`.
 ///
+/// **Persistence.** An app stays listed once it has been heard, until it
+/// quits (decision 104). The HAL only ever answers "is making sound now", so a
+/// paused app vanishes from it entirely; `seenPlaying` is the memory that keeps
+/// its row — and its resume button — on screen. Without it the list flickered
+/// out of existence at the exact moment the user acted on it.
+///
 /// **Control.** Two routes, and the pair is not arbitrary: between them they
 /// cover the case that prompted this. The app that started *last* is the
 /// now-playing client, so MediaRemote reaches it — that is how a YouTube tab
@@ -71,11 +85,11 @@ struct AudioSource: Identifiable, Equatable {
 /// raising anything.
 @MainActor
 final class AudioSourcesService: ObservableObject {
-    /// Audible, pausable apps — the now-playing client first. Empty unless
-    /// the panel is open and something is actually playing.
+    /// Controllable audio sources — the now-playing client first, each
+    /// carrying whether it is playing. Empty unless the panel is open.
     @Published private(set) var sources: [AudioSource] = []
 
-    /// Apps that answer an AppleScript `pause`, keyed by bundle id. The value
+    /// Apps that answer an AppleScript `play`/`pause`, keyed by bundle id. The value
     /// is the AppleScript application name, which is not derivable from the
     /// bundle id. Kept deliberately small: every entry is a promise that the
     /// row's pause button works.
@@ -110,10 +124,10 @@ final class AudioSourcesService: ObservableObject {
     private static let autoPauseSettle: TimeInterval = 0.4
 
     private let prefs: Preferences
-    /// Pauses the current now-playing client. Injected by `AppDelegate` rather
-    /// than reached for directly, so this service owns no adapter path and no
-    /// second copy of the transport code.
-    private let pauseNowPlaying: () -> Void
+    /// Plays or pauses the current now-playing client. Injected by
+    /// `AppDelegate` rather than reached for directly, so this service owns no
+    /// adapter path and no second copy of the transport code.
+    private let setNowPlayingPlaying: (Bool) -> Void
 
     private var pollTimer: Timer?
     private var nowPlayingBundleID: String?
@@ -122,10 +136,14 @@ final class AudioSourcesService: ObservableObject {
     /// See `nowPlayingChanged`.
     private var lastPlayingBundleID: String?
     private var autoPauseTask: Task<Void, Never>?
+    /// Every app heard making sound since launch. Entries are dropped in
+    /// `refresh` once the app is no longer running — a row for a quit app
+    /// could not be played or paused by anything.
+    private var seenPlaying: Set<String> = []
 
-    init(prefs: Preferences, pauseNowPlaying: @escaping () -> Void) {
+    init(prefs: Preferences, setNowPlayingPlaying: @escaping (Bool) -> Void) {
         self.prefs = prefs
-        self.pauseNowPlaying = pauseNowPlaying
+        self.setNowPlayingPlaying = setNowPlayingPlaying
     }
 
     // MARK: - Lifecycle
@@ -181,6 +199,10 @@ final class AudioSourcesService: ObservableObject {
         guard isPlaying, let bundleID else { return }
         let previous = lastPlayingBundleID
         lastPlayingBundleID = bundleID
+        // Recorded here rather than only in `refresh` so a player started
+        // while the notch was collapsed still has a row when the panel opens:
+        // the handover arrives whether or not anything is scanning.
+        seenPlaying.insert(bundleID)
 
         // The rule, stated in full: when a *different* app takes over
         // now-playing and starts playing, the app that just lost it gets
@@ -206,13 +228,14 @@ final class AudioSourcesService: ObservableObject {
             // within the settle window would otherwise pause what is now the
             // foreground player.
             guard self.lastPlayingBundleID == bundleID else { return }
-            Self.runAppleScriptPause(application: application)
+            Self.runAppleScript("pause", application: application)
         }
     }
 
     // MARK: - Scanning
 
-    /// Two sources, deliberately, because neither is sufficient alone.
+    /// Two sources for *who is playing*, deliberately, because neither is
+    /// sufficient alone — and one memory for *who is listed*.
     ///
     /// The now-playing client comes from **MediaRemote**, not from the HAL scan:
     /// a browser renders audio in a helper process whose own bundle id is
@@ -227,34 +250,49 @@ final class AudioSourcesService: ObservableObject {
     /// they produce audio from their own process under their own bundle id
     /// (measured: Spotify's audio object is pid 1383 `com.spotify.client`
     /// itself, Music's is pid 1306 `com.apple.Music`).
+    ///
+    /// The **row set** is then `seenPlaying` rather than that playing set: a
+    /// source heard once keeps its row while its app runs, so pausing it leaves
+    /// a resume button behind instead of deleting the control under the cursor
+    /// (decision 104). A remembered app with no route left — a browser tab that
+    /// has lost now-playing — is still dropped, exactly as in 099: there is
+    /// nothing a button on that row could do.
     private func refresh() {
         let nowPlaying = nowPlayingBundleID
+        var playing = Set<String>()
+        if nowPlayingIsPlaying, let nowPlaying { playing.insert(nowPlaying) }
+        for app in Self.audibleApps() where Self.appleScriptPausable[app.bundleID] != nil {
+            playing.insert(app.bundleID)
+        }
+        seenPlaying.formUnion(playing)
+
         var next: [AudioSource] = []
-
-        if nowPlayingIsPlaying, let nowPlaying {
+        var stillRunning: Set<String> = []
+        for bundleID in seenPlaying {
+            // `appName` is the liveness test as well as the label: it answers
+            // only for a running app, so a quit one prunes itself here.
+            guard let name = Self.appName(for: bundleID) else { continue }
+            stillRunning.insert(bundleID)
+            let route: AudioSource.ControlRoute
+            if let application = Self.appleScriptPausable[bundleID] {
+                // AppleScript is preferred even for the now-playing client: it
+                // names the app, so the click stays correct if now-playing
+                // changes hands between the scan and the click.
+                route = .appleScript(application: application)
+            } else if bundleID == nowPlaying {
+                route = .mediaRemote
+            } else {
+                continue
+            }
             next.append(AudioSource(
-                bundleID: nowPlaying,
-                name: Self.appName(for: nowPlaying) ?? nowPlaying,
-                // AppleScript is preferred even here: it names the app, so the
-                // click stays correct if now-playing changes hands between the
-                // scan and the click.
-                route: Self.appleScriptPausable[nowPlaying].map { .appleScript(application: $0) }
-                    ?? .mediaRemote,
-                isNowPlaying: true
+                bundleID: bundleID,
+                name: name,
+                route: route,
+                isNowPlaying: bundleID == nowPlaying,
+                isPlaying: playing.contains(bundleID)
             ))
         }
-
-        for app in Self.audibleApps() {
-            guard let application = Self.appleScriptPausable[app.bundleID],
-                  app.bundleID != nowPlaying
-            else { continue }
-            next.append(AudioSource(
-                bundleID: app.bundleID,
-                name: app.name,
-                route: .appleScript(application: application),
-                isNowPlaying: false
-            ))
-        }
+        seenPlaying = stillRunning
 
         // Now-playing leads: it is what just started, and what the transport
         // row above already refers to.
@@ -270,37 +308,42 @@ final class AudioSourcesService: ObservableObject {
             .first?.localizedName
     }
 
-    // MARK: - Pausing
+    // MARK: - Playing and pausing
 
-    /// Pauses one named app. The route was decided when the source was built,
-    /// so this never has to guess and never pauses the wrong player.
-    func pause(_ source: AudioSource) {
+    /// Plays or pauses one named app — whichever the row is not doing now. The
+    /// route was decided when the source was built, so this never has to guess
+    /// and never reaches the wrong player.
+    func toggle(_ source: AudioSource) {
+        let shouldPlay = !source.isPlaying
         switch source.route {
         case .mediaRemote:
-            pauseNowPlaying()
+            setNowPlayingPlaying(shouldPlay)
         case .appleScript(let application):
-            Self.runAppleScriptPause(application: application)
+            Self.runAppleScript(shouldPlay ? "play" : "pause", application: application)
         }
         // Reflect it immediately rather than waiting up to a second for the
-        // next scan: a row that lingers after the sound stops reads as a click
-        // that didn't take (UI Principle #4). The scan corrects this either
-        // way if the app ignored us.
-        sources.removeAll { $0.id == source.id }
+        // next scan: a button that keeps its old glyph after a click reads as a
+        // click that didn't take (UI Principle #4). The scan corrects this
+        // either way if the app ignored us.
+        if let index = sources.firstIndex(where: { $0.id == source.id }) {
+            sources[index].isPlaying = shouldPlay
+        }
     }
 
-    /// `pause` is used rather than `playpause` throughout: this feature only
-    /// ever silences something, and a toggle sent to an app that stopped on
-    /// its own between the scan and the click would *start* it playing.
+    /// An explicit `play` or `pause` rather than `playpause`: the command is
+    /// chosen from the state the row is showing, and a toggle sent to an app
+    /// that changed state between the scan and the click would do the opposite
+    /// of what the glyph promised.
     ///
     /// Runs off the main actor — `NSAppleScript` is synchronous, and a busy
     /// app can take seconds to answer an Apple Event, which would freeze the
     /// notch. The `is running` guard keeps Tempo from launching an app just to
-    /// pause it (Agent Guideline #3), matching `MusicService`.
-    private nonisolated static func runAppleScriptPause(application: String) {
+    /// control it (Agent Guideline #3), matching `MusicService`.
+    private nonisolated static func runAppleScript(_ command: String, application: String) {
         Task.detached(priority: .userInitiated) {
             let source = """
             if application "\(application)" is running then
-            \ttell application "\(application)" to pause
+            \ttell application "\(application)" to \(command)
             end if
             """
             guard let script = NSAppleScript(source: source) else { return }
@@ -311,7 +354,7 @@ final class AudioSourcesService: ObservableObject {
                 // is nothing to recover — the system has already put its prompt
                 // on screen — but the number is what makes a silent no-op
                 // diagnosable (Agent Guideline #11).
-                tempoDebug("pause \(application) failed: \(errorInfo[NSAppleScript.errorNumber] ?? "?")")
+                tempoDebug("\(command) \(application) failed: \(errorInfo[NSAppleScript.errorNumber] ?? "?")")
             }
         }
     }

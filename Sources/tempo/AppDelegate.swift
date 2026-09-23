@@ -42,8 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let prefs = Preferences.shared
         // Holds a closure into `media` for the one route MediaRemote owns, and
         // `media` holds it weakly back for now-playing handovers (decision 099).
-        let audioSources = AudioSourcesService(prefs: prefs) { [weak media] in
-            media?.pauseNowPlaying()
+        let audioSources = AudioSourcesService(prefs: prefs) { [weak media] playing in
+            playing ? media?.playNowPlaying() : media?.pauseNowPlaying()
         }
         media.audioSources = audioSources
         let location = LocationService(prefs: prefs)

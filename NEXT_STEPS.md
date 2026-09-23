@@ -287,6 +287,66 @@
 
 ## Now
 
+- **Watch decision 105 fix a real occurrence.** The panel's lost Space
+  membership over full-screen Chrome on the built-in display was observed but
+  its trigger was not reproduced (suspected: a full-screen Space migrating when
+  the LG is unplugged or the lid is opened). Next time: with the LG attached,
+  put Chrome full screen on the LG, unplug it, and check the panel draws over
+  Chrome on the built-in within about a second.
+
+- **The sticky audio-source rows have not been seen on screen (decision 104).**
+  The service and the view compile and the AppleScript/MediaRemote commands
+  behind the buttons were verified live, but the list itself has still never
+  been watched — the same gap decision 099 left. What to check with Spotify and
+  a YouTube tab both having played: both rows stay up after pausing either one,
+  the paused row dims and shows a play glyph, that play button actually resumes
+  the right app, and a row disappears when its app quits.
+
+- **Watch decision 106 in ordinary use.** The gate was verified against the
+  user's live full-screen Chrome by driving the pointer with posted mouse
+  events — tab reach and brief overshoot stay shut, a held push opens — but a
+  human reaching for a tab has not been watched, and the *desktop* path was not
+  re-checked after the gate was restructured. What wants checking: a tab's ✕
+  closes the tab; holding at the very top edge brings the bar down and the
+  panel with it; and on the desktop the push into the menu bar's row still
+  opens the panel exactly as before.
+
+- **Edge hold is still 10ms (decisions 093, 103, 106).** No dwell at all. The
+  full-screen case no longer depends on it — the system's own 461ms menu-bar
+  reveal is the dwell there now — but it is still the only thing between a pass
+  across the *desktop's* menu bar and an open panel. The default is 60; this
+  machine is set to 10. Wants a considered value.
+
+- **A full-screen app on an auto-hiding menu bar is untested (decision 106).**
+  This machine's bar is permanently visible, so the desktop branch of the gate
+  is the fail-open one throughout. On a display where the bar auto-hides, the
+  desktop branch reads the real sensor (091's table) and the full-screen branch
+  reads the overlay; neither has been watched there.
+
+- **Settings ▸ *When an app is full screen* has never been exercised
+  (decision 106).** It was dead on this monitor until now (it read the same
+  inert `visibleFrame` inset) and is latent anyway, because `fullScreenBehavior`
+  defaults to `.never`. Now that it reads a signal that works, the three modes
+  want watching once: `.allApps` hides the panel on entering any full-screen
+  Space and restores it on leaving, and `.mediaApp` does so only for the app
+  that is playing.
+
+- **Settings is reachable only from inside the panel.** `openSettings` is wired
+  to a callback in the panel content (`AppDelegate.swift:245`) and there is no
+  status item and no hotkey — so when decision 103's gate failed, the user lost
+  the app *and* the setting that would have rescued it. A single point of
+  failure independent of that bug: the one way in should not be the one way to
+  fix the one way in.
+
+- **Re-probe `MenuBarSensor` with the lid open (decisions 103, 106).** Decision 106 closed off the window-list route — the bar's own window is a
+  transient and cannot be read — so the status-item geometry is the only
+  non-TCC signal left, and on this display it is inert. 091's table
+  has the window sliding 1440 -> 1410 on the built-in panel; today's readings
+  have it immobile on the LG. The likely reconciliation is that it slides when
+  the *desktop* bar auto-hides but not when a full-screen Space hides it — if
+  so, the sensor never observed the full-screen tab strip it was built to
+  separate, on any display, and the gate's whole premise needs revisiting.
+
 - **The two-player case has never been seen on screen (decision 099).** The
   detection and the pause routes were each verified against the real thing, but
   only ever with **one** app audible: a 120s watcher was left running with the
@@ -694,6 +754,76 @@
   (c) accept it and document. Awaiting the user's call. -->
 
 ## Recently completed
+
+- **2026-09-23 — In a full-screen app the notch opens only under the menu bar
+  (decision 106).** Reported as *"not being able to close chrome tabs when in
+  full screen again"*, then sharpened by the user to the rule itself: *"tempo
+  should only be able to open if the menu bar is open as well"* — which is
+  decision 091's rule, and 103 is what broke it here. With the strip undrawn on
+  the LG the hover target is the menu bar's whole 30pt row, 103 had (correctly)
+  left the gate reading open at all times, and Chrome in full screen puts its
+  tab strip in that row: the panel opened over the tabs and took the click
+  meant for a ✕, pinning itself open. Inside a full-screen Space the gate is
+  now *has the system drawn the menu bar over this app* — the window server's
+  own layer-24 overlay, which slides from y=-30 to y=0 and turns on-screen only
+  for a pointer **held** at the edge (measured 461ms to arrive, 277ms to
+  leave), so a pointer passing through on its way to a tab never opens it and
+  nothing new had to be tuned. The desktop path is untouched.
+  `applyFullScreenVisibility()` moved onto the same scan, so Settings ▸ *When
+  an app is full screen* works on this monitor for the first time. **Three**
+  designs were built and rejected first, all recorded: a general
+  menu-bar-window signal (the desktop bar is `MenuBarAgent`, never on-screen —
+  a 30s sample makes it look stable and a 60s one does not); a two-row edge
+  target (an overshoot through the edge is already an open at a 10ms Edge
+  hold); and detecting full screen as one window *covering* the display, which
+  shipped and fixed Ghostty but not Chrome — Chrome full screen presents four
+  windows (`{0,0,3440,41}` tab strip, `{0,41,3440,47}` toolbar,
+  `{0,0,3440,124}` overlay, `{0,88,3440,1352}` content) and none of them covers
+  it. The test is now a window occupying the menu bar's *row*, and the gate
+  asks about the bar *before* the app because revealing the bar pushes the
+  app's windows out of that row.
+
+- **2026-09-21 — Tempo re-joins a full-screen Space it was left out of
+  (decision 105).** Over full-screen Chrome on the built-in display the panel
+  was ordered in with `.canJoinAllSpaces` + `.fullScreenAuxiliary` but not on
+  screen. One second after a Space change or display reconfiguration, a
+  visible-but-not-on-screen panel has its collection behaviour re-assigned and
+  is ordered front. Verified with a probe and with no regression across
+  entering/leaving full screen; not yet watched against the original trigger.
+
+- **2026-09-19 — Audio-source rows stay up instead of tracking the sound
+  (decision 104).** Asked for as *"when we have mutliple audio sources we
+  should show permanently instead of just showing only when they are playing"*.
+  Decision 099 built the list out of the Core Audio HAL, which answers only "is
+  making sound right now", so pausing a row deleted the row and — at two rows —
+  collapsed the whole block, and a track gap was enough to make it flicker.
+  `AudioSourcesService` now keeps `seenPlaying`, every app heard since launch
+  (also fed by now-playing handovers, so a player started while the notch was
+  collapsed already has a row); that set decides which rows exist, and the new
+  `AudioSource.isPlaying` decides what each row draws. Rows are pruned by app
+  liveness — `appName(for:)` answers only for a running app — not by a timer,
+  and 099's "no row for an app Tempo cannot reach" rule is untouched. The
+  button became a real play/pause toggle, which reverses 099's pause-only rule
+  but keeps its reasoning: an explicit `play` or `pause` chosen from the drawn
+  state, never a blind `playpause`. Verified live before shipping: `osacompile`
+  resolved `play` against all seven AppleScript apps, Spotify round-tripped
+  play → `playing` / pause → `paused`, and the adapter's `send 0` (the
+  previously unused `Command.play`) started and stopped it over MediaRemote.
+  **Not yet watched on screen** — see **Now**.
+
+- **2026-09-18 — Tempo was unreachable on an external display (decision 103).**
+  Reported as *"tempo doesnt seem to be opening right now"*. It was running the
+  whole time — pid 2373, up a day, healthy run loop, panel correctly positioned.
+  In clamshell on the LG ULTRAWIDE with `showStripOnExternalDisplays` off,
+  decision 055's mode made `NotchHoverDetector` the only way in, and its
+  menu-bar gate was permanently false: the sensor window is 34pt and centred on
+  the 30pt bar row, so it rests at `maxY = 1442` against a screen top of 1440
+  and `maxY <= maxY + 0.5` never held. Probing further, the window does not
+  move on this display in *any* state — desktop, full screen, or pointer held
+  at the edge — so the signal is absent, not just mis-scaled. `isMenuBarDown`
+  now anchors to the bar's row with 4pt of slack, which reads all five values
+  on record correctly (the one measured here plus 091's four). Confirmed by the
+  user on the rebuilt app: hovering opens the panel again.
 
 - **2026-09-16 — Public release v0.4 (decision 102).** Asked for as *"lets make
   sure everything is good to go then release v0.1 of tempo on github"*. The

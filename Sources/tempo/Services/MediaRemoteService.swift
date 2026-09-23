@@ -349,11 +349,14 @@ final class MediaRemoteService: ObservableObject {
 
     func playPause() { send(.togglePlayPause) }
 
-    /// Pauses whichever app currently holds now-playing — the only app
-    /// MediaRemote can address. `AudioSourcesService` calls this for a row
-    /// whose route is `.mediaRemote`; everything else there is paused by name
-    /// over AppleScript (decision 099).
+    /// Plays or pauses whichever app currently holds now-playing — the only
+    /// app MediaRemote can address. `AudioSourcesService` calls these for a row
+    /// whose route is `.mediaRemote`; everything else there is controlled by
+    /// name over AppleScript (decisions 099 and 104). Explicit `play`/`pause`
+    /// rather than `playPause()` above, because the row's button is drawn from
+    /// a known state and must do what its glyph says.
     func pauseNowPlaying() { send(.pause) }
+    func playNowPlaying() { send(.play) }
     func nextTrack() { send(.nextTrack) }
     func previousTrack() { send(.previousTrack) }
 
