@@ -65,6 +65,10 @@ enum ScreenWindows {
 
         var fullScreenApp: pid_t?
         var menuBarOverlayDown = false
+        // Horizontal spans of app windows sitting in the row, so a Split View
+        // Space — two apps side by side, each about half the display — reads
+        // as full screen like a single app does.
+        var rowSpans: [ClosedRange<CGFloat>] = []
         for window in list {
             guard let layer = window[kCGWindowLayer as String] as? Int,
                   let rect = bounds(window) else { continue }
@@ -99,15 +103,24 @@ enum ScreenWindows {
             // a covering window up for about a second during a Space
             // transition, and without it that transient reads as a full-screen
             // app arriving and leaving again (measured).
-            if layer == 0, fullScreenApp == nil,
+            //
+            // **Spanning is judged over all such windows together**, not per
+            // window. In Split View two apps share one full-screen Space and
+            // each window is about half the display — measured, Chrome
+            // `{0,0,1714,41}` beside Ghostty `{1726,0,1714,1440}` with a 13pt
+            // divider between — so a per-window width test found no owner and
+            // the gate fell open over both apps' top rows.
+            if layer == 0,
                rect.minY <= display.minY + 1,
-               rect.width >= display.width * 0.9,
                rect.intersects(display),
                let pid = window[kCGWindowOwnerPID as String] as? pid_t,
                NSRunningApplication(processIdentifier: pid)?.activationPolicy == .regular {
-                fullScreenApp = pid
+                let clipped = rect.intersection(display)
+                rowSpans.append(clipped.minX...clipped.maxX)
+                if fullScreenApp == nil { fullScreenApp = pid }
             }
         }
+        if coveredWidth(rowSpans) < display.width * 0.9 { fullScreenApp = nil }
         return TopRow(fullScreenApp: fullScreenApp, menuBarOverlayDown: menuBarOverlayDown)
     }
 
@@ -134,6 +147,19 @@ enum ScreenWindows {
     /// `kCGMainMenuWindowLevel`. Tempo's own panel is one level above this
     /// (`.statusBar`, 25) and is `panelWidth` wide, so it cannot match.
     private static let menuBarLayer = 24
+
+    /// Total length of the union of `spans`, so overlapping windows (Chrome's
+    /// tab strip, toolbar and overlay all start at x = 0) count once.
+    private static func coveredWidth(_ spans: [ClosedRange<CGFloat>]) -> CGFloat {
+        var total: CGFloat = 0
+        var reach = -CGFloat.infinity
+        for span in spans.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            let start = max(span.lowerBound, reach)
+            if span.upperBound > start { total += span.upperBound - start }
+            reach = max(reach, span.upperBound)
+        }
+        return total
+    }
 
     private static func bounds(_ window: [String: Any]) -> CGRect? {
         guard let dict = window[kCGWindowBounds as String] as? NSDictionary else { return nil }

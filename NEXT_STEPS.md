@@ -311,6 +311,12 @@
   panel with it; and on the desktop the push into the menu bar's row still
   opens the panel exactly as before.
 
+- **Watch decision 107 in Split View.** The row-owner test now accepts two
+  apps sharing a full-screen Space; verified by running the shipping code in the
+  user's live Chrome | Ghostty Split View (reads full screen), but a human
+  reaching for a tab in either half, and a held push bringing the bar and panel
+  down, have not been watched.
+
 - **Edge hold is still 10ms (decisions 093, 103, 106).** No dwell at all. The
   full-screen case no longer depends on it — the system's own 461ms menu-bar
   reveal is the dwell there now — but it is still the only thing between a pass
@@ -754,6 +760,10 @@
   (c) accept it and document. Awaiting the user's call. -->
 
 ## Recently completed
+
+- **2026-09-27 — Split View no longer opens the panel over a hidden menu bar
+  (decision 107).** Full screen is detected by the row-occupying windows' union
+  spanning the display, not one window doing so.
 
 - **2026-09-23 — In a full-screen app the notch opens only under the menu bar
   (decision 106).** Reported as *"not being able to close chrome tabs when in

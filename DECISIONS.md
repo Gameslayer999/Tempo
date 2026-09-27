@@ -117,6 +117,7 @@
 | 104 | 2026-09-19 | The audio-source rows stay on screen once an app has been heard, until it quits, instead of only while it is audible: the HAL answers "making sound now", so 099's list deleted the row under the cursor at the moment the user pressed pause. A remembered set (`seenPlaying`, also fed by now-playing handovers while the notch is collapsed) decides which rows exist; `isPlaying` decides what each one draws. The button becomes a real play/pause toggle, sending an explicit `play` or `pause` — reverses 099's "only ever send pause" rule, never `playpause` | Accepted |
 | 105 | 2026-09-21 | Over a full-screen Chrome on the built-in display the panel was ordered in (`isVisible`) with `.canJoinAllSpaces` + `.fullScreenAuxiliary`, yet `kCGWindowIsOnscreen` read false: the window server had left it out of that Space. Flags and level were ruled out (a fresh panel with Tempo's flags drew there at levels 24/25/27/101). One second after each Space change and after each display reconfiguration, a visible panel that is not on screen has its collection behaviour cleared and re-assigned, then is ordered front. Trigger of the lost membership not identified | Accepted |
 | 106 | 2026-09-23 | Reaching for a tab in a full-screen browser opened the panel over the tab and Tempo swallowed the click meant to close it — 103 had (correctly) left the menu-bar gate reading open at all times. The gate becomes three questions in order: the window server's layer-24 overlay is drawn over the app (open — it turns on-screen only for a pointer **held** at the edge, 461ms), an app's window occupies the menu bar's row (shut), otherwise the desktop sensor. Full screen is detected by a window *in the row*, **not** by one covering the display — Chrome full screen presents four windows and none covers it, which is why the first version fixed Ghostty and not Chrome | Accepted |
+| 107 | 2026-09-27 | Tempo still opened over full-screen apps with no menu bar when **two apps shared one full-screen Space (Split View)**. 106's row-owner test required a *single* window spanning 90% of the display; each Split View half is ~1714 of 3440pt, so no owner was found and the gate fell through to the fail-open desktop branch. Spanning is now judged over the union of every regular app's windows in the row | Accepted |
 
 ---
 
@@ -7148,3 +7149,59 @@ on this display** — 103's fail-open — and is now known not to be recoverable
 from `visibleFrame`, from a status item, or from the window list; the
 Accessibility API remains the only real answer, at a TCC grant Tempo has never
 needed. And **a full-screen app on a display whose bar auto-hides is untested**.
+
+---
+
+## 107 — A Split View Space is full screen too
+
+**Date:** 2026-09-27 · **Status:** Accepted · **Amends:** 106
+
+### Context
+
+Reported: *"tempo still opening when in full screen with no menu bar, but this
+time observed when two different apps in the same space but fullscreened"* —
+macOS Split View. Same machine and mode as 106 (LG ULTRAWIDE 3440x1440,
+decision 055's undrawn notch, desktop sensor failing open).
+
+### What was measured
+
+The live window list in the user's Split View Space, windows with `minY < 60`:
+
+    @0 Google Chrome {0,    0, 1714,   41}    tab strip
+    @0 Google Chrome {0,   41, 1714,   47}    toolbar
+    @0 Google Chrome {0,    0, 1714,  124}    overlay
+    @0 Ghostty       {1713, 0,   13, 1440}    split divider
+    @0 Ghostty       {1726, 0, 1714,   32}
+    @0 Ghostty       {1726, 0, 1714, 1440}
+
+106's owner test required one window with `width >= display.width * 0.9`
+(3096pt). The widest here is 1714, so `fullScreenApp` was nil, the overlay
+test was false (bar up), and `gateIsOpen()` fell through to the desktop branch
+— which on this display is permanently open. Exactly 106's original failure,
+reached by a layout 106 did not measure.
+
+### Options
+
+| Option | Verdict |
+| --- | --- |
+| Drop the width requirement: any regular app window in the row owns it | Simplest, but the width test is the only thing that would reject a stray window at y = 0 that is not a full-screen Space; removing it widens the net for no reason |
+| Lower the per-window threshold to ~45% | Tuned to two-way Split View; still a per-window guess |
+| **Union the x-spans of every regular app's windows in the row; require 90% coverage (chosen)** | Asks the same question 106 asked — is the row occupied across the display — for one app or several; overlapping windows (Chrome's three at x = 0) count once |
+
+### Decision
+
+`ScreenWindows.topRow` collects the display-clipped horizontal span of every
+layer-0 window owned by a regular app with `minY` at the top edge, and reports
+`fullScreenApp` (the first such pid) only when the union covers at least 90%
+of the display width. The owner check, the layer and the top-edge test are
+unchanged. `isFullScreen` inherits the fix, so Settings ▸ *When an app is full
+screen* now also sees Split View.
+
+### Consequences
+
+Verified by compiling the shipping `ScreenWindows.swift` into a probe and
+running it inside the user's live Split View Space: `fullScreenApp 2137`,
+`isFullScreen true` (before: nil / false by the arithmetic above). Covered:
+1714 + 13 + 1714 = 3441 → clipped 3440 ≥ 3096. The human-driven check — reach
+for a tab in either half, stays shut; hold at the edge, bar and panel come
+down — has not been watched.
