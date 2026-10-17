@@ -119,6 +119,7 @@
 | 106 | 2026-09-23 | Reaching for a tab in a full-screen browser opened the panel over the tab and Tempo swallowed the click meant to close it — 103 had (correctly) left the menu-bar gate reading open at all times. The gate becomes three questions in order: the window server's layer-24 overlay is drawn over the app (open — it turns on-screen only for a pointer **held** at the edge, 461ms), an app's window occupies the menu bar's row (shut), otherwise the desktop sensor. Full screen is detected by a window *in the row*, **not** by one covering the display — Chrome full screen presents four windows and none covers it, which is why the first version fixed Ghostty and not Chrome | Accepted |
 | 107 | 2026-09-27 | Tempo still opened over full-screen apps with no menu bar when **two apps shared one full-screen Space (Split View)**. 106's row-owner test required a *single* window spanning 90% of the display; each Split View half is ~1714 of 3440pt, so no owner was found and the gate fell through to the fail-open desktop branch. Spanning is now judged over the union of every regular app's windows in the row | Accepted |
 | 108 | 2026-10-01 | Clicking a Ghostty session's light focused the right split but left it **behind the app the user was in**: Ghostty 1.3.1's `focus` orders its window front only within Ghostty, and macOS's cooperative activation refuses its self-activation. Every Ghostty `focus` is now followed by an explicit `activate` | Accepted |
+| 109 | 2026-10-17 | Optional **glowing outline**: an accent-coloured glow around the collapsed pill and the expanded panel, behind an off-by-default Appearance toggle. Drawn as an overlay outside the panel's clip and alpha-gated, like the rim light, so it is not halved by the clip and retracts with the shape | Accepted |
 
 ---
 
@@ -7244,3 +7245,44 @@ frontmost on the selected split (steam_osx -> ghostty, verified).
 All four `focus` calls in `SessionFocusService` (title strong/weak match,
 single-surface and directory match) are followed by `activate`. Terminal.app's
 route already activated and is unchanged.
+
+---
+
+## 109 — An optional glowing outline, in the accent colour
+
+**Date:** 2026-10-17 · **Status:** Accepted
+
+### Context
+
+The user asked for a setting that puts a glowing outline on Tempo.
+
+### Options considered
+
+| Option | Verdict |
+| --- | --- |
+| **Accent-coloured glow on both pill and panel, off by default (chosen)** | One toggle; reuses the clamped accent (decision 069), so it is legible on the dark panel and changes with the accent; covers the collapsed pill, which is what is on screen most of the time |
+| Expanded panel only | The panel already has a white rim light; a glow only there is barely distinguishable from it, and the pill — the thing people look at — would not change |
+| Own colour picker / strength slider | More settings than were asked for (Karpathy #2); can be added if the accent proves the wrong colour |
+
+### Choice
+
+`Preferences.outlineGlow` (default `false`) gates `glowLayer` in
+`ContentView`: a 1pt stroke at 0.9 alpha plus 2.5pt/blur 3 and 6pt/blur 8
+blooms, all `NotchAccent.color(for:)`. It is applied as `.overlay` after
+`.clipShape(shape)` and gated with `.opacity`, never an `if`, for the reasons
+decision 082 gives for the rim light: inside the clip half the stroke is cut
+off, and in a branch it freezes at full panel size on collapse. The glow strokes
+`NotchShape` with `squareTop = true`: the sides run straight up and meet the
+top edge at a right angle, because following the concave top flares tapered the
+stroke into a sharp point at each corner (user request, 2026-10-17). The black
+silhouette keeps its flares. No mask on the
+top edge — it lies on the screen's edge and the spill above is off the display.
+It sits inside `panelOpacity`, so it hides with the strip when the strip is
+hidden. Hit-testing off; the window's hit region is still the silhouette only.
+The agent lights are untouched (UI Principle #2).
+
+### Verified
+
+Screenshotted on the built-in display with the glow on, both the
+collapsed pill and the top of the expanded panel, with square corners in both.
+The full expanded panel and the collapse animation have not been watched.

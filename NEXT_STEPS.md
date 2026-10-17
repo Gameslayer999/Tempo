@@ -761,6 +761,14 @@
 
 ## Recently completed
 
+- **2026-10-17 — Optional glowing outline (decision 109).** Settings ▸
+  Appearance ▸ Outline ▸ *Glowing outline*, off by default: three accent-coloured
+  strokes (1pt edge, two blurred blooms) overlaid on the silhouette outside its
+  clip, alpha-gated so they retract with the shape; top corners are square (sides
+  run straight up), not the silhouette's flares. Seen on screen on the
+  collapsed pill and the top of the expanded panel; **the full expanded panel
+  and the collapse have not been watched** — check the bloom over glass.
+
 - **2026-10-01 — Clicking a Ghostty session's light now brings Ghostty forward
   (decision 108).** `focus` selected the right split but left it behind the
   frontmost app; each Ghostty `focus` is now followed by `activate`.

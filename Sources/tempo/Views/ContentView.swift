@@ -22,6 +22,10 @@ struct NotchShape: Shape {
     /// Set on exactly one always-present instance, which reports the live
     /// animated rect to `NotchHitRegion` for the panel's hit testing.
     var report: (@Sendable (CGSize) -> Void)?
+    /// Replaces the concave top flares with straight sides that meet the top
+    /// edge at a right angle. Used only by the outline glow (decision 109),
+    /// whose stroke would otherwise taper to a sharp point at each flare.
+    var squareTop = false
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(topCornerRadius, bottomCornerRadius) }
@@ -39,11 +43,15 @@ struct NotchShape: Shape {
 
         var path = Path()
         // Top-left: out at the top edge, curving inward and down.
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.minX + top, y: rect.minY + top),
-            control: CGPoint(x: rect.minX + top, y: rect.minY)
-        )
+        if squareTop {
+            path.move(to: CGPoint(x: rect.minX + top, y: rect.minY))
+        } else {
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX + top, y: rect.minY + top),
+                control: CGPoint(x: rect.minX + top, y: rect.minY)
+            )
+        }
         path.addLine(to: CGPoint(x: rect.minX + top, y: rect.maxY - bottom))
         path.addQuadCurve(
             to: CGPoint(x: rect.minX + top + bottom, y: rect.maxY),
@@ -54,11 +62,15 @@ struct NotchShape: Shape {
             to: CGPoint(x: rect.maxX - top, y: rect.maxY - bottom),
             control: CGPoint(x: rect.maxX - top, y: rect.maxY)
         )
-        path.addLine(to: CGPoint(x: rect.maxX - top, y: rect.minY + top))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.maxX, y: rect.minY),
-            control: CGPoint(x: rect.maxX - top, y: rect.minY)
-        )
+        if squareTop {
+            path.addLine(to: CGPoint(x: rect.maxX - top, y: rect.minY))
+        } else {
+            path.addLine(to: CGPoint(x: rect.maxX - top, y: rect.minY + top))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.maxX, y: rect.minY),
+                control: CGPoint(x: rect.maxX - top, y: rect.minY)
+            )
+        }
         path.closeSubpath()
         return path
     }
@@ -360,6 +372,10 @@ struct ContentView: View {
         // branch would freeze the stroke at full panel size on collapse and
         // draw the very outline this clip exists to remove.
         .overlay(borderLayer.opacity(displayedExpanded ? 1 : 0))
+        // Same reasoning as the rim: outside the clip so the bloom is not cut
+        // in half, and alpha-gated rather than branched so it follows the
+        // shape as it retracts.
+        .overlay(glowLayer.opacity(prefs.outlineGlow ? 1 : 0))
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard prefs.showFileShelf else { return false }
             receiveDrop(providers)
@@ -594,6 +610,26 @@ struct ContentView: View {
                     .frame(height: 24)
                 Color.white
             }
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// Optional accent-coloured glow around the pill and the panel
+    /// (decision 109). A thin stroke for the edge plus two blurred strokes
+    /// for the bloom. Only the half outside the silhouette is ever seen —
+    /// inside it the panel's own fill covers it on the collapsed pill, and the
+    /// inner bloom on glass reads as the edge catching coloured light. The
+    /// top edge sits on the screen's edge, so it needs no mask: what spills
+    /// above it is off the display. The sides run straight up to it
+    /// (`squareTop`) instead of following the flares into sharp points.
+    private var glowLayer: some View {
+        let accent = NotchAccent.color(for: prefs)
+        var outline = shape
+        outline.squareTop = true
+        return ZStack {
+            outline.stroke(accent.opacity(0.55), lineWidth: 6).blur(radius: 8)
+            outline.stroke(accent.opacity(0.8), lineWidth: 2.5).blur(radius: 3)
+            outline.stroke(accent.opacity(0.9), lineWidth: 1)
         }
         .allowsHitTesting(false)
     }

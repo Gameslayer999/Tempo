@@ -312,6 +312,10 @@ Agents — so a pane is found by colour before it is read.
   macOS system accents already clear that bar and pass through untouched. The
   accent never recolours the agent lights: those hues carry state.
 
+  *Outline* has one switch, **Glowing outline** (off by default): a soft glow
+  in the accent colour traces the collapsed pill and the expanded panel, and
+  follows the accent when you change it.
+
   *Album art* has two independent switches. **Glow** paints a bloom in the
   cover's own colour behind the artwork, with a strength slider; **Blur behind
   album art** puts a blurred, slightly enlarged copy of the cover behind it.

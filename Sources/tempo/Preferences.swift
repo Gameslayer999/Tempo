@@ -44,6 +44,7 @@ final class Preferences: ObservableObject {
         static let albumGlow = "albumGlow"
         static let albumGlowStrength = "albumGlowStrength"
         static let albumArtBlur = "albumArtBlur"
+        static let outlineGlow = "outlineGlow"
         static let spectrogramPalette = "spectrogramPalette"
         static let sneakPeek = "sneakPeek"
         static let sneakPeekSeconds = "sneakPeekSeconds"
@@ -287,6 +288,13 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(albumArtBlur, forKey: Key.albumArtBlur) }
     }
 
+    /// Whether a soft glow in the accent colour traces the pill and the panel
+    /// (decision 109). Off by default: it is chrome the user opts into, not a
+    /// signal.
+    @Published var outlineGlow: Bool {
+        didSet { defaults.set(outlineGlow, forKey: Key.outlineGlow) }
+    }
+
     /// How the visualizer bars are coloured (decision 071). The tap already
     /// publishes five band magnitudes, so this is a colour mapping over data
     /// that is already there, not a new capture path.
@@ -466,6 +474,7 @@ final class Preferences: ObservableObject {
             Key.albumGlow: true,
             Key.albumGlowStrength: Self.defaultAlbumGlowStrength,
             Key.albumArtBlur: false,
+            Key.outlineGlow: false,
             Key.spectrogramPalette: SpectrogramPalette.monochrome.rawValue,
             Key.sneakPeek: true,
             Key.sneakPeekSeconds: Self.defaultSneakPeekSeconds,
@@ -513,6 +522,7 @@ final class Preferences: ObservableObject {
         albumGlow = defaults.bool(forKey: Key.albumGlow)
         albumGlowStrength = min(max(defaults.double(forKey: Key.albumGlowStrength), 0), 1)
         albumArtBlur = defaults.bool(forKey: Key.albumArtBlur)
+        outlineGlow = defaults.bool(forKey: Key.outlineGlow)
         spectrogramPalette = SpectrogramPalette(
             rawValue: defaults.string(forKey: Key.spectrogramPalette) ?? ""
         ) ?? .monochrome

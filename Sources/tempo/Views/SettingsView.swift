@@ -321,6 +321,14 @@ private struct AppearancePane: View {
             }
 
             Section {
+                Toggle("Glowing outline", isOn: $prefs.outlineGlow)
+            } header: {
+                Text("Outline")
+            } footer: {
+                FooterText("A soft glow in the accent colour around the collapsed pill and the expanded panel. It follows the accent above, so it changes when the accent does, and like the rest of the chrome it never recolours an agent light.")
+            }
+
+            Section {
                 Toggle("Glow behind the artwork", isOn: $prefs.albumGlow)
                 SliderRow(
                     title: "Strength",
