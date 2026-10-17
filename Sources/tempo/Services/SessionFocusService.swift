@@ -134,6 +134,12 @@ enum SessionFocusService {
     /// first is right by construction. A surface that merely *contains* it may
     /// be showing something else, so that grade must be unambiguous to act on
     /// (`requireUnique`).
+    ///
+    /// Every `focus` is followed by an explicit `activate`: Ghostty 1.3.1's
+    /// `focus` selects the surface and orders its window front *within*
+    /// Ghostty, but under macOS's cooperative activation its own attempt to
+    /// come forward is refused, so the right split ended up focused behind
+    /// whatever app the user was in (decision 108).
     private static func focusGhosttySurface(sessionID: String, requireUnique: Bool) -> Bool {
         guard let title = claudeSessionTitle(sessionID: sessionID) else { return false }
         let script = """
@@ -153,11 +159,13 @@ enum SessionFocusService {
             end repeat
             if (count of strong) > 0 then
               focus (item 1 of strong)
+              activate
               return "ok"
             end if
             if (count of weak) is 0 then return "no"
             if uniqueOnly and (count of weak) > 1 then return "no"
             focus (item 1 of weak)
+            activate
             return "ok"
           end tell
         end run
@@ -202,6 +210,7 @@ enum SessionFocusService {
             set surfaces to terminals
             if (count of surfaces) is 1 then
               focus (item 1 of surfaces)
+              activate
               return "ok"
             end if
             set hits to {}
@@ -221,6 +230,7 @@ enum SessionFocusService {
             end repeat
             if (count of hits) is 1 then
               focus (item 1 of hits)
+              activate
               return "ok"
             end if
           end tell

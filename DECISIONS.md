@@ -118,6 +118,7 @@
 | 105 | 2026-09-21 | Over a full-screen Chrome on the built-in display the panel was ordered in (`isVisible`) with `.canJoinAllSpaces` + `.fullScreenAuxiliary`, yet `kCGWindowIsOnscreen` read false: the window server had left it out of that Space. Flags and level were ruled out (a fresh panel with Tempo's flags drew there at levels 24/25/27/101). One second after each Space change and after each display reconfiguration, a visible panel that is not on screen has its collection behaviour cleared and re-assigned, then is ordered front. Trigger of the lost membership not identified | Accepted |
 | 106 | 2026-09-23 | Reaching for a tab in a full-screen browser opened the panel over the tab and Tempo swallowed the click meant to close it — 103 had (correctly) left the menu-bar gate reading open at all times. The gate becomes three questions in order: the window server's layer-24 overlay is drawn over the app (open — it turns on-screen only for a pointer **held** at the edge, 461ms), an app's window occupies the menu bar's row (shut), otherwise the desktop sensor. Full screen is detected by a window *in the row*, **not** by one covering the display — Chrome full screen presents four windows and none covers it, which is why the first version fixed Ghostty and not Chrome | Accepted |
 | 107 | 2026-09-27 | Tempo still opened over full-screen apps with no menu bar when **two apps shared one full-screen Space (Split View)**. 106's row-owner test required a *single* window spanning 90% of the display; each Split View half is ~1714 of 3440pt, so no owner was found and the gate fell through to the fail-open desktop branch. Spanning is now judged over the union of every regular app's windows in the row | Accepted |
+| 108 | 2026-10-01 | Clicking a Ghostty session's light focused the right split but left it **behind the app the user was in**: Ghostty 1.3.1's `focus` orders its window front only within Ghostty, and macOS's cooperative activation refuses its self-activation. Every Ghostty `focus` is now followed by an explicit `activate` | Accepted |
 
 ---
 
@@ -7205,3 +7206,41 @@ running it inside the user's live Split View Space: `fullScreenApp 2137`,
 1714 + 13 + 1714 = 3441 → clipped 3440 ≥ 3096. The human-driven check — reach
 for a tab in either half, stays shut; hold at the edge, bar and panel come
 down — has not been watched.
+
+## 108 — A focused Ghostty surface must also activate Ghostty
+
+**Date:** 2026-10-01 · **Status:** Accepted · **Amends:** 035, 085
+
+### Context
+
+Reported: *"clicking agents in tempo does not bring me to the correct
+window."* Every live session on this machine is a `cli` session in one Ghostty
+1.3.1 instance, so every click takes the Ghostty title/directory route.
+
+### What was measured
+
+Running the title-match script by hand with another app frontmost:
+
+    focus <surface whose name ends with the session title>   -> "ok"
+    focused terminal of selected tab of front window          -> the right split
+    frontmost process                                         -> still Activity Monitor
+
+Ghostty's dictionary describes `focus` as "bringing its window to the front",
+but that only orders the window within Ghostty; its own attempt to activate is
+refused under macOS's cooperative activation. The surface was selected, out of
+sight. Adding `activate` after `focus` in the same `tell` block made Ghostty
+frontmost on the selected split (steam_osx -> ghostty, verified).
+
+### Options
+
+| Option | Verdict |
+| --- | --- |
+| **`activate` inside the Ghostty `tell`, right after `focus` (chosen)** | One line per match; activation arrives as an Apple Event from the requesting process, which macOS honours; `focus` has already made the target window Ghostty's key window, so activation lands on it |
+| `activateProcess(pid:)` via System Events afterwards | Second `osascript` launch (~0.2s) for the same result; needs the Accessibility grant |
+| `NSRunningApplication.activate` from Tempo | Tempo is a non-activating panel app; cooperative activation can refuse it for the same reason |
+
+### Decision
+
+All four `focus` calls in `SessionFocusService` (title strong/weak match,
+single-surface and directory match) are followed by `activate`. Terminal.app's
+route already activated and is unchanged.

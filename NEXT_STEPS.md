@@ -761,6 +761,9 @@
 
 ## Recently completed
 
+- **2026-10-01 — Clicking a Ghostty session's light now brings Ghostty forward
+  (decision 108).** `focus` selected the right split but left it behind the
+  frontmost app; each Ghostty `focus` is now followed by `activate`.
 - **2026-09-27 — Split View no longer opens the panel over a hidden menu bar
   (decision 107).** Full screen is detected by the row-occupying windows' union
   spanning the display, not one window doing so.
