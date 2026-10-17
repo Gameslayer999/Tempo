@@ -4,13 +4,14 @@ A dynamic notch for macOS — in the spirit of boringNotch and NotchNook — tha
 the MacBook notch into a glanceable surface for **music** and **live AI-agent
 session status**.
 
-> **Status: pre-alpha — v0.4.** Everything described below is implemented and
+> **Status: pre-alpha — v0.5.** Everything described below is implemented and
 > builds clean with `scripts/build.sh` on macOS 14+ (Apple silicon, developed on
 > macOS 26). It has only ever run on one Mac, and there are no tests: treat it as
 > something to read and build, not something to depend on. Several features are
 > written and compiling but **have not yet been watched on screen** — the
 > two-player play/pause rows, the session-finish peek, the lock-screen cards, the
-> album-glow strength curve, the pinned-display picker, and capture exclusion.
+> album-glow strength curve, the pinned-display picker, capture exclusion, and
+> the glowing outline on the full expanded panel.
 > **Full-screen hiding now works on an external display** (decision 106) but has
 > never been exercised — it is off by default.
 > `NEXT_STEPS.md` names exactly what is unverified and how to check it;

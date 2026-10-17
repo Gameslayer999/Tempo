@@ -7,6 +7,11 @@
 
 ## Current state
 
+- **v0.5 tagged (2026-10-17).** Decisions 103–109 since v0.4: the full-screen
+  hover gate and Split View, sticky audio rows, Space rejoin, Ghostty
+  activation on light click, and the optional glowing outline. Pushed as a git
+  tag only — no GitHub Release has been created for it.
+
 - **Tempo is public, and v0.4 is released (2026-09-16), decision 102.**
   `Gameslayer999/Tempo` is no longer a private repo and `v0.4` is the first
   GitHub *Release* the project has ever had — `v0.1`/`v0.2`/`v0.3` were pushed
