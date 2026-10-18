@@ -120,6 +120,7 @@
 | 107 | 2026-09-27 | Tempo still opened over full-screen apps with no menu bar when **two apps shared one full-screen Space (Split View)**. 106's row-owner test required a *single* window spanning 90% of the display; each Split View half is ~1714 of 3440pt, so no owner was found and the gate fell through to the fail-open desktop branch. Spanning is now judged over the union of every regular app's windows in the row | Accepted |
 | 108 | 2026-10-01 | Clicking a Ghostty session's light focused the right split but left it **behind the app the user was in**: Ghostty 1.3.1's `focus` orders its window front only within Ghostty, and macOS's cooperative activation refuses its self-activation. Every Ghostty `focus` is now followed by an explicit `activate` | Accepted |
 | 109 | 2026-10-17 | Optional **glowing outline**: an accent-coloured glow around the collapsed pill and the expanded panel, behind an off-by-default Appearance toggle. Drawn as an overlay outside the panel's clip and alpha-gated, like the rim light, so it is not halved by the clip and retracts with the shape | Accepted |
+| 110 | 2026-10-17 | The bundle version is read from git instead of hardcoded: newest `vX.Y[.Z]` tag → `CFBundleShortVersionString` (padded to X.Y.Z), commit count → `CFBundleVersion`. The hardcoded `0.2.0` was never bumped for v0.3 or v0.4. No tag or no git history falls back to 0.0.0 (0) with a warning | Accepted |
 
 ---
 
@@ -7286,3 +7287,42 @@ The agent lights are untouched (UI Principle #2).
 Screenshotted on the built-in display with the glow on, both the
 collapsed pill and the top of the expanded panel, with square corners in both.
 The full expanded panel and the collapse animation have not been watched.
+
+---
+
+## 110 — The bundle version comes from the git tag
+
+**Date:** 2026-10-17 · **Status:** Accepted
+
+### Context
+
+Settings ▸ About showed **0.2.0** on a v0.5 build. `scripts/make-app.sh` wrote
+`CFBundleShortVersionString` `0.2.0` and `CFBundleVersion` `2` as literals, and
+nobody bumped them at v0.3 or v0.4. It was first fixed by hand to 0.5.0 (5)
+(`2ff2253`); the user then asked for the version to follow the tags so it
+cannot drift again.
+
+### Options considered
+
+| Option | Verdict |
+| --- | --- |
+| **Derive from git in `make-app.sh` (chosen)** | Tagging *is* the version bump; no second place to forget. Commit count as the build number is monotonic on `main` |
+| Keep the literal, add a release checklist | Exactly the step that was already skipped twice |
+| A checked-in `VERSION` file | Still a second source of truth next to the tag |
+
+### Choice
+
+`git describe --tags --abbrev=0 --match 'v[0-9]*'` gives the newest reachable
+tag; `^v(X).(Y)(.Z)?$` maps it to `X.Y.Z` (missing Z → 0). `git rev-list
+--count HEAD` is the build number. A tree with no tag or no `.git` — GitHub's
+source zip, the only download v0.4/v0.5 offer besides cloning — gets
+`0.0.0 (0)` and a warning on stderr rather than a failed build; the README's
+Building section says so. Commits after a tag keep that tag's version and are
+told apart by the build number. Releasing is now: tag, then run
+`make-app.sh`.
+
+### Verified
+
+On this machine at `v0.5`: the rebuilt bundle's Info.plist reads `0.5.0` /
+`25`, and the relaunched app is that bundle. The fallback block, run against a
+directory with no git history, printed the warning and produced `0.0.0 (0)`.

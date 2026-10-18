@@ -5,7 +5,8 @@
 # Idempotent: safe to re-run in any state. Always builds fresh, always
 # rebuilds the .app bundle from scratch (rm -rf before assembling), and the
 # Info.plist is generated from the heredoc below — there is no separate
-# checked-in plist to drift out of sync.
+# checked-in plist to drift out of sync. The version is read from the newest
+# vX.Y git tag, so releasing is: tag, then run this.
 #
 # Usage: scripts/make-app.sh   (from anywhere; resolves the repo root itself)
 
@@ -21,6 +22,21 @@ BUNDLE_ID="com.gameslayer999.tempo"
 DIST_DIR="$REPO_ROOT/dist"
 APP_BUNDLE="$DIST_DIR/${APP_NAME}.app"
 RELEASE_BIN="$REPO_ROOT/.build/release/${EXECUTABLE_NAME}"
+
+# Version comes from git, so it cannot drift from the release tags (decision
+# 110): the newest reachable `vX.Y[.Z]` tag is CFBundleShortVersionString
+# (padded to X.Y.Z), and the commit count is CFBundleVersion, which only ever
+# goes up. A tree with no git history or no tag (e.g. GitHub's source zip)
+# falls back to 0.0.0 (0) with a warning rather than failing the build.
+VERSION_TAG="$(git -C "$REPO_ROOT" describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null)"
+BUNDLE_BUILD="$(git -C "$REPO_ROOT" rev-list --count HEAD 2>/dev/null)"
+if [[ "$VERSION_TAG" =~ ^v([0-9]+)\.([0-9]+)(\.([0-9]+))?$ ]] && [[ -n "$BUNDLE_BUILD" ]]; then
+  BUNDLE_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[4]:-0}"
+else
+  echo "warning: no vX.Y git tag found; versioning the bundle 0.0.0 (0)" >&2
+  BUNDLE_VERSION="0.0.0"
+  BUNDLE_BUILD="0"
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Build (release). SwiftPM serializes concurrent builds on a lock file in
@@ -114,9 +130,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 	<key>CFBundleExecutable</key>
 	<string>${EXECUTABLE_NAME}</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.5.0</string>
+	<string>${BUNDLE_VERSION}</string>
 	<key>CFBundleVersion</key>
-	<string>5</string>
+	<string>${BUNDLE_BUILD}</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSMinimumSystemVersion</key>

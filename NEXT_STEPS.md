@@ -11,6 +11,8 @@
   hover gate and Split View, sticky audio rows, Space rejoin, Ghostty
   activation on light click, and the optional glowing outline. Pushed as a git
   tag only — no GitHub Release has been created for it.
+  The bundle version now comes from the newest `vX.Y` tag (decision 110):
+  **to release, tag first, then run `make-app.sh`.**
 
 - **Tempo is public, and v0.4 is released (2026-09-16), decision 102.**
   `Gameslayer999/Tempo` is no longer a private repo and `v0.4` is the first

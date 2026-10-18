@@ -508,6 +508,11 @@ If Tempo was already running, `make-app.sh` quits and relaunches it for you:
 launching the new binary, so without that a rebuild silently keeps the old build
 on screen.
 
+The version shown in **Settings → About** comes from git: the newest `vX.Y` tag
+is the version and the commit count is the build number. Built from a tree with
+no git history (GitHub's *Download ZIP*), it reads **0.0.0 (0)** — clone the
+repo instead to get the real version.
+
 Two one-time permission prompts, both required for full function:
 - **Automation → Spotify** — only for add-to-playlist, which needs Spotify's own
   track id. Now-playing, the transport buttons and the progress bar all work
