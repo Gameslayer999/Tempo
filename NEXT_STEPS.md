@@ -768,6 +768,13 @@
 
 ## Recently completed
 
+- **2026-10-17 — Lights for sessions in Claude Code's background pty host go to
+  their Ghostty tab (decision 111).** The ancestry walk stopped at
+  `ClaudeCode.app --bg-pty-host`, so the click did nothing. These sessions now
+  route by surface title, and a `--name`/`/rename` `custom-title` wins over
+  `ai-title`. Verified against live Ghostty, and the user confirmed a click
+  lands in the InSpace session.
+
 - **2026-10-17 — Optional glowing outline (decision 109).** Settings ▸
   Appearance ▸ Outline ▸ *Glowing outline*, off by default: three accent-coloured
   strokes (1pt edge, two blurred blooms) overlaid on the silhouette outside its

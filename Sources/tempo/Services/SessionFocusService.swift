@@ -83,6 +83,15 @@ enum SessionFocusService {
         }
         guard let terminal = terminalApp(of: pid) else { return }
 
+        // A session Claude Code runs in its own background pty host
+        // (`ClaudeCode.app/…/claude --bg-pty-host`) has a tty but no window:
+        // the terminal showing it is only an attached viewer, so it is reached
+        // like a background agent — by its surface title (decision 111).
+        if terminal.name == "ClaudeCode" {
+            _ = focusGhosttySurface(sessionID: sessionID, requireUnique: false)
+            return
+        }
+
         if terminal.name == "Terminal", focusTerminalTab(tty: tty) { return }
         if terminal.name == "Ghostty" {
             if focusGhosttySurface(sessionID: sessionID, requireUnique: true) { return }
@@ -281,6 +290,19 @@ enum SessionFocusService {
         // whole, which left exactly the longest-running sessions unreachable by
         // title (decision 087).
         guard let data = try? Data(contentsOf: path, options: .mappedIfSafe) else { return nil }
+        // A session renamed with `--name` or `/rename` shows its `custom-title`
+        // in the terminal instead, so that wins whenever one exists. It is not
+        // re-written after every `ai-title`, hence a whole-file search: 85ms on
+        // a 30MB transcript, off the main actor (decision 111).
+        if let hit = data.range(of: Data("\"custom-title\"".utf8), options: .backwards) {
+            let start = data[..<hit.lowerBound].lastIndex(of: 0x0A).map { $0 + 1 } ?? 0
+            let end = data[hit.upperBound...].firstIndex(of: 0x0A) ?? data.count
+            if let object = try? JSONSerialization.jsonObject(with: data[start..<end]) as? [String: Any],
+               object["type"] as? String == "custom-title",
+               let value = object["customTitle"] as? String, !value.isEmpty {
+                return value
+            }
+        }
         let marker = Data("\"ai-title\"".utf8)
         var end = data.count
         while end > 0 {

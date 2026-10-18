@@ -121,6 +121,7 @@
 | 108 | 2026-10-01 | Clicking a Ghostty session's light focused the right split but left it **behind the app the user was in**: Ghostty 1.3.1's `focus` orders its window front only within Ghostty, and macOS's cooperative activation refuses its self-activation. Every Ghostty `focus` is now followed by an explicit `activate` | Accepted |
 | 109 | 2026-10-17 | Optional **glowing outline**: an accent-coloured glow around the collapsed pill and the expanded panel, behind an off-by-default Appearance toggle. Drawn as an overlay outside the panel's clip and alpha-gated, like the rim light, so it is not halved by the clip and retracts with the shape | Accepted |
 | 110 | 2026-10-17 | The bundle version is read from git instead of hardcoded: newest `vX.Y[.Z]` tag → `CFBundleShortVersionString` (padded to X.Y.Z), commit count → `CFBundleVersion`. The hardcoded `0.2.0` was never bumped for v0.3 or v0.4. No tag or no git history falls back to 0.0.0 (0) with a warning | Accepted |
+| 111 | 2026-10-17 | Clicking the light of a session Claude Code hosts in its **background pty host** (`ClaudeCode.app/…/claude --bg-pty-host`, a tty but no window; Ghostty only attached as a viewer) did nothing: the ancestry walk stopped at `ClaudeCode.app`, took it for the terminal and tried to front a windowless process. Such a session now routes like a background agent, by Ghostty surface title. The title lookup prefers the last `custom-title` (`--name` / `/rename`, which is what the tab shows) over `ai-title` | Accepted |
 
 ---
 
@@ -7326,3 +7327,57 @@ told apart by the build number. Releasing is now: tag, then run
 On this machine at `v0.5`: the rebuilt bundle's Info.plist reads `0.5.0` /
 `25`, and the relaunched app is that bundle. The fallback block, run against a
 directory with no git history, printed the warning and produced `0.0.0 (0)`.
+
+---
+
+## 111 — Sessions in Claude Code's background pty host are reached by surface title
+
+### Context
+
+Reported as clicking agent lights no longer reaching the session "since I
+installed InSpace". InSpace was not the cause: it only taps ⌃←/⌃→ key events.
+The sessions that failed were the InSpace project's, which Claude Code 2.1.302
+runs under its background pty host. Measured process trees:
+
+```
+6098 ttys007  …/claude/versions/2.1.302            (session 585280ea)
+6012 ??       …/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host
+5997 ??       ~/.local/bin/claude daemon run
+5945 ttys003  claude      (the client attached in Ghostty)
+ … zsh → login → Ghostty
+```
+
+`terminalApp(of:)` returns the first `.app` ancestor, so it returned
+`ClaudeCode` (pid 6012). Neither the Terminal nor the Ghostty branch applied,
+`activateProcess` fronted a process with no windows, and the click ended with
+nothing. A second problem sat behind it: the session was started with
+`--name`, so its Ghostty tab reads `◐ Instant macOS space switching (2)` (the
+`custom-title` record) while Tempo matched on the last `ai-title`,
+`Instant macOS space switching`. That is only a weak match, and with
+`requireUnique: false` it could land on the session it was forked from.
+
+### Options considered
+
+| Option | Verdict |
+| --- | --- |
+| **Treat a `ClaudeCode` host as a background agent (chosen)** | Same route the tty-less background case already uses: focus the attached surface by title, never open anything |
+| Keep walking past `ClaudeCode.app` to the daemon's ancestors | Finds the Ghostty that *launched* the daemon. The daemon outlives that shell, and the launcher's surface may not be the one showing this session |
+| Match by tty | The pty host's tty (`ttys007`) is not any Ghostty surface's |
+
+### Choice
+
+`focusCLISession` sends a session whose host app is `ClaudeCode` to
+`focusGhosttySurface(requireUnique: false)`. `claudeSessionTitle` returns the
+last `custom-title` record when one exists, otherwise the last `ai-title` as
+before. `custom-title` is not re-written after every `ai-title`, so it is a
+whole-file backward search: 85ms on the largest transcript here (30MB, no
+match), run in the detached focus task and only on a click.
+
+### Verified
+
+Built with `scripts/build.sh` and installed with `scripts/make-app.sh`.
+`custom-title` for 585280ea is `Instant macOS space switching (2)`. Run against
+the live Ghostty, that title is a strong (`ends with`) match for exactly one
+surface (`strong=1 weak=0`). The user then clicked the light and landed in
+the InSpace session.
+
