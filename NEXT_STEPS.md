@@ -294,6 +294,20 @@
 
 ## Now
 
+- **The global audio tap costs ~15% of a core in coreaudiod.** Measured
+  2026-10-22 with `top`: coreaudiod at 15.1% CPU with Tempo running, 0.4% with
+  Tempo quit, while Tempo's own process read 0.8%. The tap is
+  `CATapDescription(stereoGlobalTapButExcludeProcesses: [])` in
+  `AudioTapService`. The user had reported the Mac feeling slow. Next: find out
+  when the tap runs (always, or only while audio plays), then propose options,
+  such as tapping only while audio is active and the strip is visible.
+
+- **The glowing outline is mostly hidden when the pill is bare-notch.** With
+  no media and no agent light, the pill is exactly the notch, so the glow's
+  edge stroke sits under the hardware notch and only a sliver shows below it.
+  The user chose to leave it for now (2026-10-22). Proposed fix: push the glow
+  ~3pt outward in that state only.
+
 - **Watch decision 105 fix a real occurrence.** The panel's lost Space
   membership over full-screen Chrome on the built-in display was observed but
   its trigger was not reproduced (suspected: a full-screen Space migrating when
