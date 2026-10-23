@@ -768,6 +768,27 @@
 
 ## Recently completed
 
+- **2026-10-22 — The notch panel can no longer be tiled into Split View
+  (decision 114).** Tempo had not crashed. macOS took the panel into a Split
+  View tile (`styleMask` gained `.fullScreen`), and it was drawn on no Space
+  for 3 days. The panel now sets `.fullScreenDisallowsTiling`. Seen on screen
+  over Split View after relaunch. Not verified: that this blocks the original
+  capture (trigger not reproduced). If the panel goes missing again, check its
+  `styleMask` for `.fullScreen` before anything else.
+
+- **2026-10-19 — A finished background job's light goes once read (decision
+  113).** Closing the Ghostty window on a background job only detaches it, so
+  its pid stays alive and 112 doesn't apply. Tempo now drops the light when
+  `claude agents` reports the job `done` and its finish has been seen.
+  Covered by `test-agent-lights.sh`. Not yet watched on screen.
+
+- **2026-10-19 — Closing a Claude Code window removes its light (decision
+  112).** Tempo now drops a Claude Code session whose `pid` has exited,
+  instead of waiting for AgentStatus.app (not running here) to delete the file
+  or for the 2-hour staleness drop. Covered by `test-agent-lights.sh`. Not yet
+  watched on screen. Follow-up: verify what pid the Codex hook writes, then
+  extend the filter to Codex.
+
 - **2026-10-17 — Lights for sessions in Claude Code's background pty host go to
   their Ghostty tab (decision 111).** The ancestry walk stopped at
   `ClaudeCode.app --bg-pty-host`, so the click did nothing. These sessions now

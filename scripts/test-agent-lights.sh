@@ -58,17 +58,17 @@ PY
 # The two fixture states, written fresh before each phase so a rerun cannot
 # inherit the previous one.
 cat > "$FIX/fixture.py" <<'PY'
-import json, os, sys, time
+import json, os, subprocess, sys, time
 root, phase = sys.argv[1], sys.argv[2]
 T = int(time.time())
 for f in os.listdir(f"{root}/status/sessions"): os.remove(f"{root}/status/sessions/{f}")
 for f in os.listdir(f"{root}/sessions"): os.remove(f"{root}/sessions/{f}")
 open(f"{root}/spawns.log", "w").close()
 
-def status(sid, state, ide="cli", detail="", updated_at=None):
+def status(sid, state, ide="cli", detail="", updated_at=None, pid=1):
     # `detail` is the wrap-up message a Stop event writes: non-empty means the
     # turn ended with output to review, empty means it did not.
-    json.dump({"state": state, "cwd": root, "ide": ide, "pid": 1, "label": sid,
+    json.dump({"state": state, "cwd": root, "ide": ide, "pid": pid, "label": sid,
                "updated_at": updated_at or T, "task": "t", "detail": detail},
               open(f"{root}/status/sessions/{sid}.json", "w"))
 
@@ -85,6 +85,9 @@ if phase == "1":
     status("E", "idle");    record("E", "idle",  (T + 5) * 1000)
     status("F", "idle");    record("F", "idle",  (T + 5) * 1000)
     status("G", "idle");    record("G", "idle",  (T + 5) * 1000)
+    # 113: background jobs Claude Code reports `done`, one already read and one not.
+    status("M", "idle");    record("M", "idle",  (T + 5) * 1000)
+    status("N", "idle", detail="here is what I did"); record("N", "idle", (T + 5) * 1000)
     status("H", "running", ide="claude-desktop")              # reports no status at all
     status("I", "idle", ide="vscode")                         # a fresh idle: no wrap-up
     status("J", "idle", ide="vscode", detail="here is what I did")
@@ -94,6 +97,8 @@ if phase == "1":
         {"sessionId": "E", "kind": "background",  "status": "busy", "state": "working", "id": "jobE"},
         {"sessionId": "F", "kind": "background",  "status": "idle", "state": "blocked", "id": "jobF"},
         {"sessionId": "G", "kind": "background",  "status": "idle", "state": "blocked", "id": "jobG"},
+        {"sessionId": "M", "kind": "background",  "status": "idle", "state": "done", "id": "jobM"},
+        {"sessionId": "N", "kind": "background",  "status": "idle", "state": "done", "id": "jobN"},
         {"sessionId": "A", "kind": "interactive", "status": "busy"},
     ], open(f"{root}/agents.json", "w"))
 else:
@@ -101,6 +106,11 @@ else:
     # listing must not be spawned at all.
     status("A", "running"); record("A", "busy", (T - 5) * 1000, "interactive")
     status("B", "idle");    record("B", "idle", (T + 5) * 1000, "interactive")
+    # 112: a closed window leaves its file behind with a pid that has exited.
+    # A Claude Code light goes; a Codex one is left to the staleness backstop.
+    gone = subprocess.Popen(["/usr/bin/true"]); gone.wait()
+    status("K", "running", pid=gone.pid); record("K", "busy", (T - 5) * 1000, "interactive")
+    status("L", "idle", ide="codex-cli", pid=gone.pid)
     json.dump([], open(f"{root}/agents.json", "w"))
 PY
 
@@ -133,6 +143,8 @@ func phase1() {
     check("bg working -> green", light("E")?.state ?? "-", "running")
     check("bg stopped to ask -> orange", light("F")?.state ?? "-", "blocked")
     check("bg idle at an empty prompt -> stays grey", light("G")?.state ?? "-", "idle")
+    check("bg done, nothing unread -> no light", light("M") == nil ? "gone" : "shown", "gone")
+    check("bg done, output unread -> keeps its light", String(light("N")?.unread ?? false), "true")
     check("answer from the light's own second -> stays green", light("B")?.state ?? "-", "running")
     check("Claude Code says busy -> stays green", light("C")?.state ?? "-", "running")
     check("host reports no status -> stays green", light("H")?.state ?? "-", "running")
@@ -186,7 +198,7 @@ func phase1() {
     // three rows the panel shows without scrolling are the three worth seeing.
     check("attention rows sort above the rest",
           state.sessions.map { \$0.id }.joined(separator: ","),
-          "F,D,J,B,C,E,H,A,G,I")
+          "F,D,J,N,B,C,E,H,A,G,I")
 
     // 045: clicking the row clears *both* finished flags, so the pill above the
     // panel can never stay white over a row the click has already greyed.
@@ -197,6 +209,10 @@ func phase1() {
     check("acknowledged -> 'just finished' stays out inside the window",
           String(light("D")?.justFinished ?? true), "false")
     check("acknowledged -> the pill dot stays out", summary("D"), "idle")
+    // 113: once its finish is read, a done background job's light goes.
+    if let n = light("N") { state.acknowledgeFinish(n) }
+    RunLoop.main.run(until: Date().addingTimeInterval(2.5))
+    check("bg done, output read -> light goes", light("N") == nil ? "gone" : "shown", "gone")
 
     let spawns = (try? String(contentsOfFile: fixture + "/spawns.log", encoding: .utf8)) ?? ""
     check("a background job is possible -> the listing is queried",
@@ -212,9 +228,9 @@ func phase2() {
     let spawns = (try? String(contentsOfFile: fixture + "/spawns.log", encoding: .utf8)) ?? ""
     check("only interactive sessions -> no subprocess at all",
           spawns.isEmpty ? "0" : "1+", "0")
-    check("and the lights still read as written",
+    check("lights read as written, minus the exited Claude session",
           state.sessions.map { "\\(\$0.id)=\\(\$0.state)" }.sorted().joined(separator: ","),
-          "A=running,B=idle")
+          "A=running,B=idle,L=idle")
 }
 
 MainActor.assumeIsolated {

@@ -122,6 +122,9 @@
 | 109 | 2026-10-17 | Optional **glowing outline**: an accent-coloured glow around the collapsed pill and the expanded panel, behind an off-by-default Appearance toggle. Drawn as an overlay outside the panel's clip and alpha-gated, like the rim light, so it is not halved by the clip and retracts with the shape | Accepted |
 | 110 | 2026-10-17 | The bundle version is read from git instead of hardcoded: newest `vX.Y[.Z]` tag → `CFBundleShortVersionString` (padded to X.Y.Z), commit count → `CFBundleVersion`. The hardcoded `0.2.0` was never bumped for v0.3 or v0.4. No tag or no git history falls back to 0.0.0 (0) with a warning | Accepted |
 | 111 | 2026-10-17 | Clicking the light of a session Claude Code hosts in its **background pty host** (`ClaudeCode.app/…/claude --bg-pty-host`, a tty but no window; Ghostty only attached as a viewer) did nothing: the ancestry walk stopped at `ClaudeCode.app`, took it for the terminal and tried to front a windowless process. Such a session now routes like a background agent, by Ghostty surface title. The title lookup prefers the last `custom-title` (`--name` / `/rename`, which is what the tab shows) over `ai-title` | Accepted |
+| 112 | 2026-10-19 | Closing a Claude Code window left its light on the bar for up to 2 hours: the session dies before its `SessionEnd` hook runs, the status file stays, and AgentStatus's dead-pid prune only runs while AgentStatus.app does (it was not running). Tempo now skips a Claude Code session whose `pid` no longer exists (`kill(pid, 0)` → `ESRCH`). Codex and Cursor sessions are left to the 2-hour staleness drop until their hooks' pid is verified | Accepted |
+| 113 | 2026-10-19 | A background job whose Ghostty window was closed kept its light forever: closing the window only detaches the viewer, and the job's process lives on in Claude Code's pty host, so 112's dead-pid check never fires. A light is now dropped once `claude agents --json` reports the job `state: done` **and** its finish is neither "just finished" nor unread, so a finishing job still raises its peek and white light | Accepted |
+| 114 | 2026-10-22 | The notch panel vanished from every Space for 3 days with Tempo still running: macOS took it into a Split View tile (its `styleMask` gained `.fullScreen`, an `NSToolbarFullScreenWindow` held it as `originalWindow`). The panel now sets `.fullScreenDisallowsTiling`. `.fullScreenNone` was rejected: measured, it stops `.fullScreenAuxiliary` drawing over full-screen apps | Accepted |
 
 ---
 
@@ -7381,3 +7384,130 @@ the live Ghostty, that title is a strong (`ends with`) match for exactly one
 surface (`strong=1 weak=0`). The user then clicked the light and landed in
 the InSpace session.
 
+## 112 — A Claude Code light goes when its process does
+
+**Date:** 2026-10-19
+
+### Context
+
+The user reported that closing an agent window did not remove its light.
+Tempo drops a light only when its status file disappears or turns 2 hours
+stale. Closing a terminal window kills Claude Code before its `SessionEnd` hook
+runs, so the file stays. AgentStatus prunes such files, but only while
+AgentStatus.app is running, and it was not running here. Decision 043 had
+already logged this as a known gap.
+
+Measured on this machine: 10 files in `~/.claude/status/sessions/`. In 7 of
+them the `pid` no longer existed, and one of those still said `running`. The 3
+live pids were all `claude` processes (`ps`), including the session doing this
+work, so the field identifies the session's own process.
+
+### Options considered
+
+| Option | Verdict |
+| --- | --- |
+| **Dead-pid filter for Claude Code sessions (chosen)** | A few lines, read-only, and the light goes on the next 2s poll after the window closes |
+| The same filter for every session | Rejected for now. The Codex hook writes `os.getppid()`, which has not been confirmed to be the long-lived `codex` process (no Codex was running to check). If it is a short-lived shell, every live Codex light would vanish |
+| Run AgentStatus.app at login and change nothing | Rejected. Tempo's lights would depend on another app *running*, not just on its hooks being installed — the dependency 043 already declined |
+
+### Choice
+
+`AgentStatusService.processGone` skips a session whose `pid` is above 0, whose
+`ide` is neither `cursor` nor `codex*`, and for which `kill(pid, 0)` fails with
+`ESRCH`. `EPERM` means the pid exists, so it counts as alive. A reused pid
+keeps the light until the 2-hour drop, which is no worse than before.
+
+### Verified
+
+`scripts/build.sh` succeeds. `scripts/test-agent-lights.sh` passes in full,
+including a new phase-2 case: a `cli` session whose pid has exited is dropped,
+and a `codex-cli` session with the same exited pid is kept.
+
+## 113 — A finished background job's light goes once it has been read
+
+**Date:** 2026-10-19
+
+### Context
+
+Right after 112, the user reported an InSpace light whose window was already
+closed. Its pid (6098) was alive. That session is background job `585280ea`,
+hosted by `claude --bg-pty-host` (pid 6012, parent launchd), the case decision
+111 covers. Closing the Ghostty window only detached the viewer. `claude agents
+--json` still listed it as `kind: background`, `state: done`, `status: idle`.
+
+`done` is not set when the window closes. The job's `state.json` says `done`
+with `lastTerminalAt` = 2026-10-19T20:24:10.697Z, the same second as the
+status file's last `updated_at`. So `done` means the job's final turn ended.
+Hiding on `done` alone would remove a finishing job's light before its
+"just finished" peek or unread white light was ever seen (042/044).
+
+### Options considered
+
+| Option | Verdict |
+| --- | --- |
+| **Hide `done` background jobs once their finish is read (chosen)** | Uses the listing Tempo already queries every 10s. Working or blocked jobs keep their lights. A resumed job leaves `done` and its light returns |
+| Keep showing it | Rejected by the user. The light is accurate, but the user has no use for it after closing the window |
+| Hide any background job with no Ghostty window showing it | Rejected. It would hide a job waiting on the user (UI Principle #2) and needs a Ghostty lookup on every poll |
+
+### Choice
+
+`AgentStatusService.jobRetired` filters a session after `markUnread` when
+its `CliFact` is `kind: background`, `jobState: done`, and the session is
+neither `justFinished` nor `unread`. Clicking the row acknowledges the finish
+(044), and the next poll removes it. Acknowledgements are in memory, so after
+a Tempo relaunch a `done` job with a wrap-up message shows as unread once more
+until it is clicked.
+
+### Verified
+
+`scripts/build.sh` succeeds. `scripts/test-agent-lights.sh` passes, with new
+phase-1 cases: a `done` job with nothing unread has no light; one with unread
+output keeps its light and sorts with the other unread rows; after
+`acknowledgeFinish` it is gone on the next poll.
+
+## 114 — The notch panel opts out of Split View tiling
+
+**Date:** 2026-10-22
+
+### Context
+
+The user reported Tempo "seemed to have crashed". It had not: the process
+(started 2026-10-19 17:00) was alive, its main thread idle in the run loop, and
+there was no crash report or error log. But the notch panel was drawn on no
+Space, not on a desktop, a full-screen app, or Split View, so the
+glowing outline was gone too. Read from inside the process with lldb:
+
+- `NotchPanel` was `isVisible`, level 25, alpha 1, behaviour 337
+  (`canJoinAllSpaces | stationary | ignoresCycle | fullScreenAuxiliary`).
+- Its `styleMask` was 16512: `.nonactivatingPanel` **plus `.fullScreen`**.
+- The process also held an `NSToolbarFullScreenWindow` whose
+  `originalWindow` was the `NotchPanel`, and an
+  `_NSFullScreenTileOverlayWindow`, the Split View tiling overlay.
+- The window server put its frame 34pt below the top of the screen.
+
+macOS had taken the panel into full screen through Split View tiling. The
+panel was not opted out, so it was a tiling candidate like any other window.
+A full-screen window lives only on its own Space, so the panel dropped out of
+`canJoinAllSpaces` and was never drawn again. Code-side visibility
+(`applyFullScreenVisibility`, the 106 rejoin) cannot see this: both gate on
+`isVisible`, which stayed true.
+
+### Options considered
+
+| Option | Verdict |
+| --- | --- |
+| **`.fullScreenDisallowsTiling` (chosen)** | One flag, aimed at the path observed (the tile overlay). Measured with a probe panel on a full-screen Space: still drawn alongside `.fullScreenAuxiliary` |
+| `.fullScreenNone` + `.fullScreenDisallowsTiling` (the approved plan) | Rejected after measuring. AppKit accepts the combination, but the probe panel with `.fullScreenNone` was **not** drawn on a full-screen Space while identical panels without it were. It would have regressed decision 076 |
+| Also detect `styleMask.contains(.fullScreen)` and toggle back out | Deferred. More code for a case the flag should prevent. Revisit if the panel goes missing again |
+
+### Choice
+
+`applyPrivacyAndSpaceBehavior()` includes `.fullScreenDisallowsTiling` in
+the panel's collection behaviour, for every `fullScreenBehavior` setting.
+
+### Verified
+
+`scripts/make-app.sh` succeeds. After relaunch the panel is on screen at
+y=0 (`kCGWindowIsOnscreen` true) over a Chrome + Terminal Split View.
+**Not verified:** that the flag prevents the original capture. The trigger
+was not reproduced, because the exact action that tiled the panel is unknown.

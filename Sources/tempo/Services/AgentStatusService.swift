@@ -121,6 +121,7 @@ final class AgentStatusService: ObservableObject {
                 guard let data = try? Data(contentsOf: url) else { continue }
                 guard let session = Self.parseSession(id: id, data: data) else { continue }
                 guard now.timeIntervalSince(session.updatedAt) < Self.staleAfter else { continue }
+                guard !Self.processGone(session) else { continue }
 
                 parsed.append(session)
             }
@@ -144,7 +145,20 @@ final class AgentStatusService: ObservableObject {
         }
         refreshCLIFacts(now: now, needed: mightBeBackground)
         let (reconciled, reconciledIdle) = reconcile(parsed, records: records)
-        setSessions(Self.sort(markUnread(markFinished(reconciled, now: now, reconciledIdle: reconciledIdle))))
+        let marked = markUnread(markFinished(reconciled, now: now, reconciledIdle: reconciledIdle))
+        setSessions(Self.sort(marked.filter { !jobRetired($0) }))
+    }
+
+    /// Whether a background job's light has nothing left to say (decision 113).
+    /// Closing the Ghostty window on a background job only detaches the viewer;
+    /// the job's process lives on in Claude Code's pty host, so its file is
+    /// never pruned. Once the job reports `done` — set when its final turn
+    /// ends — and that finish has been seen, the light goes. Until then it
+    /// stays, so a job that finishes still raises its peek and white light.
+    private func jobRetired(_ session: AgentSession) -> Bool {
+        guard let fact = cliFacts?[session.id],
+              fact.kind == "background", fact.jobState == "done" else { return false }
+        return !session.justFinished && !session.unread
     }
 
     /// Overlay Claude Code's own view on the states the hook wrote, and report
@@ -188,6 +202,20 @@ final class AgentStatusService: ObservableObject {
             return session
         }
         return (out, reconciledIdle)
+    }
+
+    /// Whether a Claude Code session's own process has exited (decision 112).
+    /// Closing a terminal window kills the session before its `SessionEnd` hook
+    /// runs, so its status file stays on disk; AgentStatus prunes those, but
+    /// only while AgentStatus.app is running. Only `ESRCH` counts as gone —
+    /// `EPERM` means the pid exists. A missing pid (0) and Codex/Cursor sessions,
+    /// whose hooks' pid has not been verified to be the agent's own process,
+    /// are left to the staleness backstop.
+    private static func processGone(_ session: AgentSession) -> Bool {
+        guard session.pid > 0,
+              session.ide != "cursor",
+              !session.ide.hasPrefix("codex") else { return false }
+        return kill(pid_t(session.pid), 0) != 0 && errno == ESRCH
     }
 
     /// Refresh the `claude agents --json` answer off the main actor, at most one

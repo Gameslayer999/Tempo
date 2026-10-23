@@ -540,8 +540,15 @@ final class NotchPanel: NSPanel {
     func applyPrivacyAndSpaceBehavior() {
         sharingType = prefs.hideFromScreenCapture ? .none : .readOnly
 
+        // `.fullScreenDisallowsTiling` (decision 114): the panel must never
+        // itself become a Split View tile. Without it macOS once took it into
+        // one — styleMask gained `.fullScreen`, and the panel vanished from
+        // every reachable Space. `.fullScreenNone` would also block that, but
+        // measured with a probe panel it stops `.fullScreenAuxiliary` drawing
+        // over full-screen apps, so it is deliberately left out.
         var behavior: NSWindow.CollectionBehavior = [
             .canJoinAllSpaces, .stationary, .ignoresCycle,
+            .fullScreenDisallowsTiling,
         ]
         if prefs.fullScreenBehavior != .allApps {
             behavior.insert(.fullScreenAuxiliary)
